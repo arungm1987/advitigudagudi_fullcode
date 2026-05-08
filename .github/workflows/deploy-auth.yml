@@ -18,50 +18,52 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Install dependencies
-        run: |
-          cd auth-service
-          npm ci
+        run: cd auth-service && npm ci
 
-      - name: Build project
-        run: |
-          cd auth-service
-          npm run build || true
+      - name: Build TypeScript
+        run: cd auth-service && npm run build || true
 
-      - name: Setup SAM CLI
+      - name: Install SAM CLI
         run: |
           python -m pip install --upgrade pip
           pip install aws-sam-cli
 
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Validate SAM
-        run: |
-          cd auth-service
-          sam validate
+      - name: Validate SAM Template
+        run: cd auth-service && sam validate
 
-      - name: Build SAM
-        run: |
-          cd auth-service
-          sam build
+      - name: Build SAM Application
+        run: cd auth-service && sam build
 
       - name: Deploy Auth Service
         run: |
+          unset AWS_PROFILE
           cd auth-service
           sam deploy \
-            --stack-name auth-service-stack \
-            --region $AWS_REGION \
+            --stack-name advitigudagudi-auth \
+            --region ap-south-1 \
             --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
             --resolve-s3 \
+            --parameter-overrides \
+              GoogleClientId="${{ secrets.GOOGLE_CLIENT_ID }}" \
+              GoogleClientSecretArn="${{ secrets.GOOGLE_CLIENT_SECRET_ARN }}" \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset
+
+      - name: Show CloudFormation Outputs
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name advitigudagudi-auth \
+            --region ap-south-1

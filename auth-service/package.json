@@ -1,0 +1,25 @@
+{
+  "name": "advitigudagudi-auth-service",
+  "version": "0.1.0",
+  "description": "Auth Service for Advitigudagudi",
+  "main": "handlers/postConfirmation.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest",
+    "lint": "eslint . --ext .ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.400.0",
+    "@aws-sdk/client-eventbridge": "^3.400.0",
+    "@aws-sdk/client-sqs": "^3.400.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.110",
+    "@types/node": "^20.19.40",
+    "eslint": "^8.0.0",
+    "prettier": "^2.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.5"
+  }
+}

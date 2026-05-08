@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Unified User Microservice with UI Support
+
+Globals:
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,OPTIONS'"
+      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+      AllowOrigin: "'*'"
+
+Resources:
+  # The Shared Database
+  UserProfilesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: advitigudagudi-user-service-Profiles
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # Function 1: Handle Signups (Post Confirmation)
+  PostConfirmationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/postConfirmation.handler
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Events:
+        TestApi:
+          Type: Api
+          Properties:
+            Path: /test-registration
+            Method: post
+      Environment:
+        Variables:
+          USER_PROFILES_TABLE_NAME: !Ref UserProfilesTable
+          EVENT_BUS_NAME: PhotoShareEventBus
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UserProfilesTable
+        - EventBridgePutEventsPolicy:
+            EventBusName: PhotoShareEventBus
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2022"
+        External: ["@aws-sdk/*"]
+        EntryPoints: ["src/handlers/postConfirmation.ts"]
+
+  # Function 2: Fetch Users for the UI
+  GetUsersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/getUsers.handler
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Events:
+        GetUsers:
+          Type: Api
+          Properties:
+            Path: /users
+            Method: get
+      Environment:
+        Variables:
+          USER_PROFILES_TABLE_NAME: !Ref UserProfilesTable
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref UserProfilesTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2022"
+        External: ["@aws-sdk/*"]
+        EntryPoints: ["src/handlers/getUsers.ts"]
+
+Outputs:
+  WebEndpoint:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"

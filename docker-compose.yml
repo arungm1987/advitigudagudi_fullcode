@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  # DynamoDB Local
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: dynamodb-local
+    ports:
+      - "8000:8000"
+    environment:
+      - AWS_ACCESS_KEY_ID=local
+      - AWS_SECRET_ACCESS_KEY=local
+    volumes:
+      - dynamodb-data:/home/dynamodblocal/data
+    # Use in-memory mode to avoid host volume file permission issues during local dev
+    # Note: in-memory mode does not persist data across restarts.
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    networks:
+      - advitigudagudi-network
+
+  # User Microservice
+  user-microservice:
+    build:
+      context: ./user-microservice
+      dockerfile: Dockerfile.local
+    container_name: user-microservice
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=development
+      - AWS_ACCESS_KEY_ID=local
+      - AWS_SECRET_ACCESS_KEY=local
+      - AWS_REGION=us-east-1
+      - USER_PROFILES_TABLE_NAME=advitigudagudi-user-service-Profiles
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      - PORT=3000
+    depends_on:
+      - dynamodb-local
+    networks:
+      - advitigudagudi-network
+    volumes:
+      - ./user-microservice/src:/app/src
+      - ./user-microservice/local-server.ts:/app/local-server.ts
+
+  # Frontend MFE
+  sample-mfe:
+    build:
+      context: ./sample-mfe
+      dockerfile: Dockerfile
+    container_name: sample-mfe
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_BASE_URL=http://user-microservice:3000
+    depends_on:
+      - user-microservice
+    networks:
+      - advitigudagudi-network
+
+volumes:
+  dynamodb-data:
+
+networks:
+  advitigudagudi-network:
+    driver: bridge

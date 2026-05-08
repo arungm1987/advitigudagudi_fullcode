@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Advitigudagudi Auth Service - Production Foundation
+
+Parameters:
+  # Using Parameters allows us to change values without touching the code
+  CognitoDomainPrefix:
+    Type: String
+    Default: advitigudagudi-auth
+    Description: Unique prefix for the Hosted UI login page.
+
+Globals:
+  Function:
+    Runtime: nodejs22.x # Using the latest Node.js as requested[cite: 4]
+    Architectures:
+      - arm64 # Graviton for 19% better price-performance[cite: 1]
+    Timeout: 30
+    MemorySize: 256
+
+Resources:
+  # The central event bus for asynchronous microservice communication[cite: 2, 4]
+  PhotoShareEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub "${AWS::StackName}-PhotoShareBus"
+
+  # Cognito User Pool: Manages user identities and security policies[cite: 4]
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-user-pool"
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+
+  # Hosted UI Domain: MUST be globally unique in the region[cite: 4]
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      # Appending AccountId ensures global uniqueness for the domain[cite: 4]
+      Domain: !Sub "${CognitoDomainPrefix}-${AWS::AccountId}"
+      UserPoolId: !Ref UserPool
+
+  # App Client: The interface between the React frontend and Cognito[cite: 4]
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: web-client
+      UserPoolId: !Ref UserPool
+      # Security: Prevents hackers from guessing valid emails[cite: 4]
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_USER_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+Outputs:
+  # Exporting these values allows other stacks (Photo/Calendar) to import them[cite: 1, 4]
+  UserPoolId:
+    Value: !Ref UserPool
+    Export:
+      Name: !Sub "${AWS::StackName}-UserPoolId"
+  
+  PhotoShareEventBusArn:
+    Value: !GetAtt PhotoShareEventBus.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-PhotoShareEventBusArn"
+
+  PhotoShareEventBusName:
+    Value: !GetAtt PhotoShareEventBus.Name
+    Export:
+      Name: !Sub "${AWS::StackName}-PhotoShareEventBusName"

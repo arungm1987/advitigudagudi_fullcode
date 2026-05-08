@@ -1,0 +1,361 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Advitigudagudi Calendar and Meeting Service - Scheduling + Chime SDK
+
+Parameters:
+  AuthStackName:
+    Type: String
+    Default: advitigudagudi-auth
+    Description: Auth stack name to import exports.
+  
+  UserStackName:
+    Type: String
+    Default: advitigudagudi-user
+    Description: User stack name to import exports.
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    Timeout: 60
+    MemorySize: 512
+    Tracing: Active
+    Environment:
+      Variables:
+        LOG_LEVEL: INFO
+        AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+  Api:
+    TracingEnabled: true
+    Cors:
+      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Idempotency-Key'"
+      AllowOrigin: "'*'"
+
+Resources:
+  # Meeting Metadata Table
+  MeetingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-meetings"
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      AttributeDefinitions:
+        - AttributeName: meetingId
+          AttributeType: S
+        - AttributeName: organizerUserId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: meetingId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: organizerUserIdIndex
+          KeySchema:
+            - AttributeName: organizerUserId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Service
+          Value: calendar-service
+
+  # User Index Table (synced from USER_CREATED events)
+  UserIndexTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-user-index"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: emailIndex
+          KeySchema:
+            - AttributeName: email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Service
+          Value: calendar-service
+
+  # Chime Meeting Sessions Table (ephemeral, tracks active sessions)
+  ChimeMeetingSessionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-chime-sessions"
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: chimeMeetingId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: chimeMeetingId
+          KeyType: HASH
+      Tags:
+        - Key: Service
+          Value: calendar-service
+
+  # DLQ for meeting operations
+  CalendarServiceDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-dlq"
+      MessageRetentionPeriod: 1209600
+
+  # Lambda: Create meeting
+  CreateMeetingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-create-meeting"
+      CodeUri: ./
+      Handler: src/handlers/createMeeting.handler
+      Environment:
+        Variables:
+          MEETING_TABLE_NAME: !Ref MeetingTable
+          USER_INDEX_TABLE_NAME: !Ref UserIndexTable
+          CHIME_SESSION_TABLE_NAME: !Ref ChimeMeetingSessionTable
+          EVENT_BUS_NAME:
+            Fn::ImportValue: !Sub "${AuthStackName}-PhotoShareEventBusName"
+          DLQ_URL: !Ref CalendarServiceDLQ
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MeetingTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref UserIndexTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ChimeMeetingSessionTable
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - chime:CreateMeeting
+                - chime:CreateMeetingWithAttendees
+              Resource: '*'
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource:
+                Fn::ImportValue: !Sub "${AuthStackName}-PhotoShareEventBusArn"
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt CalendarServiceDLQ.QueueName
+      Events:
+        CreateMeeting:
+          Type: Api
+          Properties:
+            Path: /v1/meetings
+            Method: post
+            Auth:
+              DefaultAuthorizer: CognitoAuthorizer
+      Metadata:
+        BuildMethod: esbuild
+        BuildProperties:
+          Minify: true
+          Target: es2022
+          External: ['@aws-sdk/*']
+          EntryPoints: ['src/handlers/createMeeting.ts']
+
+  # Lambda: Get meeting details
+  GetMeetingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-get-meeting"
+      CodeUri: ./
+      Handler: src/handlers/getMeeting.handler
+      Environment:
+        Variables:
+          MEETING_TABLE_NAME: !Ref MeetingTable
+          CHIME_SESSION_TABLE_NAME: !Ref ChimeMeetingSessionTable
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MeetingTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref ChimeMeetingSessionTable
+      Events:
+        GetMeeting:
+          Type: Api
+          Properties:
+            Path: /v1/meetings/{meetingId}
+            Method: get
+            Auth:
+              DefaultAuthorizer: CognitoAuthorizer
+      Metadata:
+        BuildMethod: esbuild
+        BuildProperties:
+          Minify: true
+          Target: es2022
+          External: ['@aws-sdk/*']
+          EntryPoints: ['src/handlers/getMeeting.ts']
+
+  # Lambda: Generate Chime attendee token (invoked when user joins)
+  JoinMeetingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-join-meeting"
+      CodeUri: ./
+      Handler: src/handlers/joinMeeting.handler
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          MEETING_TABLE_NAME: !Ref MeetingTable
+          CHIME_SESSION_TABLE_NAME: !Ref ChimeMeetingSessionTable
+          DLQ_URL: !Ref CalendarServiceDLQ
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MeetingTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ChimeMeetingSessionTable
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - chime:CreateAttendee
+                - chime:GetAttendee
+              Resource: '*'
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt CalendarServiceDLQ.QueueName
+      Events:
+        JoinMeeting:
+          Type: Api
+          Properties:
+            Path: /v1/meetings/{meetingId}/join
+            Method: post
+            Auth:
+              DefaultAuthorizer: CognitoAuthorizer
+      Metadata:
+        BuildMethod: esbuild
+        BuildProperties:
+          Minify: true
+          Target: es2022
+          External: ['@aws-sdk/*']
+          EntryPoints: ['src/handlers/joinMeeting.ts']
+
+  # Lambda: List user's meetings
+  ListMeetingsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-list-meetings"
+      CodeUri: ./
+      Handler: src/handlers/listMeetings.handler
+      Environment:
+        Variables:
+          MEETING_TABLE_NAME: !Ref MeetingTable
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MeetingTable
+      Events:
+        ListMeetings:
+          Type: Api
+          Properties:
+            Path: /v1/meetings
+            Method: get
+            Auth:
+              DefaultAuthorizer: CognitoAuthorizer
+      Metadata:
+        BuildMethod: esbuild
+        BuildProperties:
+          Minify: true
+          Target: es2022
+          External: ['@aws-sdk/*']
+          EntryPoints: ['src/handlers/listMeetings.ts']
+
+  # EventBridge Rule: Subscribe to USER_CREATED events
+  UserCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-user-created"
+      EventBusName:
+        Fn::ImportValue: !Sub "${AuthStackName}-PhotoShareEventBusName"
+      EventPattern:
+        source: ['photoshare.users']
+        detail-type: ['USER_CREATED']
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SyncUserIndexFunction.Arn
+          RoleArn: !GetAtt EventBridgeRole.Arn
+
+  # Lambda: Sync user index from USER_CREATED events
+  SyncUserIndexFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-sync-user-index"
+      CodeUri: ./
+      Handler: src/handlers/syncUserIndex.handler
+      Environment:
+        Variables:
+          USER_INDEX_TABLE_NAME: !Ref UserIndexTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UserIndexTable
+      Metadata:
+        BuildMethod: esbuild
+        BuildProperties:
+          Minify: true
+          Target: es2022
+          External: ['@aws-sdk/*']
+          EntryPoints: ['src/handlers/syncUserIndex.ts']
+
+  # Permission for EventBridge to invoke Lambda
+  SyncUserIndexInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SyncUserIndexFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt UserCreatedRule.Arn
+
+  # IAM Role for EventBridge
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt SyncUserIndexFunction.Arn
+
+  # Cognito Authorizer
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: CognitoJWTAuthorizer
+      Type: COGNITO_USER_POOLS
+      ProviderARNs:
+        - Fn::ImportValue: !Sub "${AuthStackName}-UserPoolArn"
+      IdentitySource: method.request.header.Authorization
+
+Outputs:
+  ApiEndpoint:
+    Value: !Sub "https://${ServerlessApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiEndpoint"
+    Description: Calendar Service API endpoint
+
+  MeetingTableName:
+    Value: !Ref MeetingTable
+    Export:
+      Name: !Sub "${AWS::StackName}-MeetingTableName"
+
+  ChimeMeetingSessionTableName:
+    Value: !Ref ChimeMeetingSessionTable
+    Export:
+      Name: !Sub "${AWS::StackName}-ChimeMeetingSessionTableName"

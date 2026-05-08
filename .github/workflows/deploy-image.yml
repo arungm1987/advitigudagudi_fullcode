@@ -1,0 +1,79 @@
+name: CI/CD — Build & Deploy (Lambda container images)
+
+on:
+  push:
+    paths:
+      - 'user-microservice/**'
+      - 'sample-mfe/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ap-south-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create ECR repositories if missing
+        run: |
+          aws ecr create-repository --repository-name advitigudagudi-user-postconfirmation --region $AWS_REGION || true
+          aws ecr create-repository --repository-name advitigudagudi-user-getusers --region $AWS_REGION || true
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "ECR_POSTCONFIRM_REPO=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/advitigudagudi-user-postconfirmation" >> $GITHUB_ENV
+          echo "ECR_GETUSERS_REPO=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/advitigudagudi-user-getusers" >> $GITHUB_ENV
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build and push PostConfirmation image (arm64)
+        uses: docker/build-push-action@v4
+        with:
+          context: ./user-microservice
+          file: ./user-microservice/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.ECR_POSTCONFIRM_REPO }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push GetUsers image (arm64)
+        uses: docker/build-push-action@v4
+        with:
+          context: ./user-microservice
+          file: ./user-microservice/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.ECR_GETUSERS_REPO }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install SAM CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install aws-sam-cli
+
+      - name: Deploy with SAM (image template)
+        run: |
+          sam deploy --template-file user-microservice/template-image.yaml \
+            --stack-name advitigudagudi-stack \
+            --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+            --parameter-overrides \
+              PostConfirmationImage=${{ env.ECR_POSTCONFIRM_REPO }}:${{ github.sha }} \
+              GetUsersImage=${{ env.ECR_GETUSERS_REPO }}:${{ github.sha }} \
+            --no-confirm-changeset

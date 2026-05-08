@@ -16,7 +16,7 @@ Parameters:
     Description: Google OAuth Client ID
   GoogleClientSecretArn:
     Type: String
-    Description: Secrets Manager ARN containing the Google client secret JSON (key: clientSecret)
+    Description: Secrets Manager ARN containing the Google client secret JSON 
 
 Globals:
   Function:

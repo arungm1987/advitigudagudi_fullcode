@@ -71,7 +71,8 @@ jobs:
       - name: Deploy with SAM (image template)
         run: |
           # Ensure SAM CLI does not pick a local named profile (samconfig.toml)
-          export AWS_PROFILE=
+          unset AWS_PROFILE || true
+          export SAM_CLI_TELEMETRY=0
           sam deploy --template-file user-microservice/template-image.yaml \
             --stack-name advitigudagudi-stack \
             --region $AWS_REGION \

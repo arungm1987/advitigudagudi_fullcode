@@ -71,7 +71,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "auth-service-postconfirmation-${Environment}"
-      Handler: handlers/postConfirmation.handler
+      Handler: dist/handlers/postConfirmation.handler
       CodeUri: ./
       Policies:
         - DynamoDBCrudPolicy:

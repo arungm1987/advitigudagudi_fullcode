@@ -70,13 +70,14 @@ jobs:
 
       - name: Deploy with SAM (image template)
         run: |
+          set -euo pipefail
           # Ensure SAM CLI does not pick a local named profile (samconfig.toml)
-          unset AWS_PROFILE || true
+          unset AWS_PROFILE
           export SAM_CLI_TELEMETRY=0
           # If a samconfig.toml exists and defines a profile, remove that line temporarily so SAM uses env creds
           if [ -f user-microservice/samconfig.toml ]; then
-            cp user-microservice/samconfig.toml user-microservice/samconfig.toml.bak || true
-            sed -i.bak '/^profile\s*=\s*/d' user-microservice/samconfig.toml || true
+            cp user-microservice/samconfig.toml user-microservice/samconfig.toml.bak
+            sed -i.bak '/^profile\s*=\s*/d' user-microservice/samconfig.toml
           fi
           sam deploy --template-file user-microservice/template-image.yaml \
             --stack-name advitigudagudi-stack \
@@ -85,8 +86,9 @@ jobs:
             --parameter-overrides \
               PostConfirmationImage=${{ env.ECR_POSTCONFIRM_REPO }}:${{ github.sha }} \
               GetUsersImage=${{ env.ECR_GETUSERS_REPO }}:${{ github.sha }} \
+            --resolve-image-repos \
             --no-confirm-changeset
           # restore original samconfig if we backed it up
           if [ -f user-microservice/samconfig.toml.bak ]; then
-            mv user-microservice/samconfig.toml.bak user-microservice/samconfig.toml || true
+            mv user-microservice/samconfig.toml.bak user-microservice/samconfig.toml
           fi

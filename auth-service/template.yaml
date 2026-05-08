@@ -1,22 +1,20 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Advitigudagudi Auth Service - Production Foundation
+
+Description: Auth Service - Cognito + PostConfirmation + EventBridge
 
 Parameters:
-  CognitoDomainPrefix:
-    Type: String
-    Default: advitigudagudi-auth
-    Description: Unique prefix for the Hosted UI login page.
   Environment:
     Type: String
     Default: dev
-    AllowedValues: [dev, staging, prod]
+
   GoogleClientId:
     Type: String
     Description: Google OAuth Client ID
+
   GoogleClientSecretArn:
     Type: String
-    Description: Secrets Manager ARN containing the Google client secret JSON 
+    Description: "AWS Secrets Manager ARN containing Google client secret JSON (key: clientSecret)"
 
 Globals:
   Function:
@@ -26,37 +24,48 @@ Globals:
     Timeout: 30
     MemorySize: 512
     Tracing: Active
-    Environment:
-      Variables:
-        USERS_TABLE_NAME: !Sub "${AWS::StackName}-users-${Environment}"
-        EVENT_BUS_NAME: !Sub "${AWS::StackName}-PhotoShareBus"
-        DLQ_URL: !Ref AuthServiceDLQ
 
 Resources:
+
+  #############################################
+  # EventBridge Bus
+  #############################################
+
   PhotoShareEventBus:
     Type: AWS::Events::EventBus
     Properties:
-      Name: !Sub "${AWS::StackName}-PhotoShareBus"
+      Name: advitigudagudi-auth-PhotoShareBus
+
+  #############################################
+  # DLQ
+  #############################################
 
   AuthServiceDLQ:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub "auth-service-dlq-${Environment}"
+      QueueName: auth-service-dlq-dev
       MessageRetentionPeriod: 1209600
+
+  #############################################
+  # DynamoDB
+  #############################################
 
   UsersTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub "${AWS::StackName}-users-${Environment}"
+      TableName: advitigudagudi-auth-users-dev
       BillingMode: PAY_PER_REQUEST
+
       AttributeDefinitions:
         - AttributeName: userId
           AttributeType: S
         - AttributeName: email
           AttributeType: S
+
       KeySchema:
         - AttributeName: userId
           KeyType: HASH
+
       GlobalSecondaryIndexes:
         - IndexName: EmailGSI
           KeySchema:
@@ -64,126 +73,210 @@ Resources:
               KeyType: HASH
           Projection:
             ProjectionType: ALL
+
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
+
+  #############################################
+  # Lambda Function
+  #############################################
 
   PostConfirmationFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub "auth-service-postconfirmation-${Environment}"
-      Handler: dist/handlers/postConfirmation.handler
+      FunctionName: auth-service-postconfirmation-dev
+
       CodeUri: ./
+
+      Handler: dist/handlers/postConfirmation.handler
+
+      Environment:
+        Variables:
+          USERS_TABLE_NAME: !Ref UsersTable
+          DLQ_URL: !Ref AuthServiceDLQ
+          EVENT_BUS_NAME: !Ref PhotoShareEventBus
+
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+
         - SQSSendMessagePolicy:
             QueueName: !GetAtt AuthServiceDLQ.QueueName
-        - EventBridgePutEventsPolicy:
-            EventBusName: !Ref PhotoShareEventBus
-        - Version: '2012-10-17'
-          Statement:
+
+        - Statement:
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !GetAtt PhotoShareEventBus.Arn
+
+        - Statement:
             - Effect: Allow
               Action:
                 - logs:CreateLogGroup
                 - logs:CreateLogStream
                 - logs:PutLogEvents
-              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/auth-service-postconfirmation-${Environment}:*'
+              Resource: "*"
+
+        - Statement:
             - Effect: Allow
               Action:
                 - xray:PutTraceSegments
                 - xray:PutTelemetryRecords
-              Resource: '*'
-      Environment:
-        Variables:
-          USERS_TABLE_NAME: !Ref UsersTable
-          EVENT_BUS_NAME: !Ref PhotoShareEventBus
-          DLQ_URL: !Ref AuthServiceDLQ
+              Resource: "*"
 
-  # Grant Cognito permission to invoke the PostConfirmation Lambda
+  #############################################
+  # Cognito User Pool
+  #############################################
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: advitigudagudi-auth-user-pool
+
+      UsernameAttributes:
+        - email
+
+      AutoVerifiedAttributes:
+        - email
+
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+
+      LambdaConfig:
+        PostConfirmation: !GetAtt PostConfirmationFunction.Arn
+
+  #############################################
+  # Allow Cognito to Invoke Lambda
+  #############################################
+
   PostConfirmationInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !GetAtt PostConfirmationFunction.Arn
+      FunctionName: !Ref PostConfirmationFunction
       Action: lambda:InvokeFunction
       Principal: cognito-idp.amazonaws.com
       SourceArn: !GetAtt UserPool.Arn
 
-  # Cognito User Pool and related resources
-  UserPool:
-    Type: AWS::Cognito::UserPool
-    Properties:
-      UserPoolName: !Sub "${AWS::StackName}-user-pool"
-      UsernameAttributes: [email]
-      AutoVerifiedAttributes: [email]
-      LambdaConfig:
-        PostConfirmation: !GetAtt PostConfirmationFunction.Arn
-      Policies:
-        PasswordPolicy:
-          MinimumLength: 8
-          RequireLowercase: true
-          RequireUppercase: true
-          RequireNumbers: true
-          RequireSymbols: true
+  #############################################
+  # Google Identity Provider
+  #############################################
 
-  UserPoolDomain:
-    Type: AWS::Cognito::UserPoolDomain
-    Properties:
-      Domain: !Sub "${CognitoDomainPrefix}-${AWS::AccountId}"
-      UserPoolId: !Ref UserPool
-
-  UserPoolClient:
-    Type: AWS::Cognito::UserPoolClient
-    DependsOn:
-      - GoogleIdentityProvider
-    Properties:
-      ClientName: web-client
-      UserPoolId: !Ref UserPool
-      PreventUserExistenceErrors: ENABLED
-      ExplicitAuthFlows:
-        - ALLOW_USER_AUTH
-        - ALLOW_USER_SRP_AUTH
-        - ALLOW_REFRESH_TOKEN_AUTH
-      SupportedIdentityProviders:
-        - COGNITO
-        - Google
-      CallbackURLs: []
-      LogoutURLs: []
-
-  # Google Identity Provider (uses dynamic Secrets Manager reference for client secret)
   GoogleIdentityProvider:
     Type: AWS::Cognito::UserPoolIdentityProvider
     Properties:
       ProviderName: Google
       ProviderType: Google
+
       UserPoolId: !Ref UserPool
+
       ProviderDetails:
         client_id: !Ref GoogleClientId
-        client_secret: !Join ['', ['{{resolve:secretsmanager:', !Ref GoogleClientSecretArn, ':SecretString:clientSecret}}']]
-        authorize_scopes: 'profile email openid'
+        client_secret: !Sub "{{resolve:secretsmanager:${GoogleClientSecretArn}:SecretString:clientSecret}}"
+        authorize_scopes: "openid email profile"
+
+      AttributeMapping:
+        email: email
+        given_name: given_name
+        family_name: family_name
+        picture: picture
+
+  #############################################
+  # User Pool Client
+  #############################################
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+
+    DependsOn:
+      - GoogleIdentityProvider
+
+    Properties:
+      UserPoolId: !Ref UserPool
+
+      ClientName: web-client
+
+      GenerateSecret: false
+
+      ExplicitAuthFlows:
+        - ALLOW_USER_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+      SupportedIdentityProviders:
+        - COGNITO
+        - Google
+
+      CallbackURLs:
+        - http://localhost:5173/auth/callback
+
+      LogoutURLs:
+        - http://localhost:5173
+
+      AllowedOAuthFlowsUserPoolClient: true
+
+      AllowedOAuthFlows:
+        - code
+
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+
+  #############################################
+  # Cognito Domain
+  #############################################
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+
+    DependsOn:
+      - UserPoolClient
+
+    Properties:
+      Domain: !Sub "advitigudagudi-auth-${AWS::AccountId}"
+      UserPoolId: !Ref UserPool
 
 Outputs:
-  UserPoolId:
+
+  CognitoUserPoolId:
     Value: !Ref UserPool
     Export:
-      Name: !Sub "${AWS::StackName}-UserPoolId"
+      Name: CognitoUserPoolId
 
-  UserPoolArn:
+  CognitoUserPoolArn:
     Value: !GetAtt UserPool.Arn
     Export:
-      Name: !Sub "${AWS::StackName}-UserPoolArn"
+      Name: CognitoUserPoolArn
 
-  UserPoolClientId:
+  CognitoUserPoolClientId:
     Value: !Ref UserPoolClient
     Export:
-      Name: !Sub "${AWS::StackName}-UserPoolClientId"
+      Name: CognitoUserPoolClientId
 
-  HostedUIDomain:
-    Description: Hosted UI domain (use for Google redirect)
-    Value: !GetAtt UserPoolDomain.Domain
+  CognitoDomain:
+    Value: !Sub "https://advitigudagudi-auth-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com"
+
+  UsersTableName:
+    Value: !Ref UsersTable
     Export:
-      Name: !Sub "${AWS::StackName}-HostedUIDomain"
+      Name: UsersTableName
 
   PhotoShareBusName:
-    Value: !GetAtt PhotoShareEventBus.Name
+    Value: !Ref PhotoShareEventBus
     Export:
-      Name: !Sub "${AWS::StackName}-PhotoShareBusName"
+      Name: PhotoShareBusName
+
+  PhotoShareBusArn:
+    Value: !GetAtt PhotoShareEventBus.Arn
+    Export:
+      Name: PhotoShareBusArn
+
+  DLQUrl:
+    Value: !Ref AuthServiceDLQ
+    Export:
+      Name: AuthServiceDLQUrl

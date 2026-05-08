@@ -3,34 +3,120 @@ Transform: AWS::Serverless-2016-10-31
 Description: Advitigudagudi Auth Service - Production Foundation
 
 Parameters:
-  # Using Parameters allows us to change values without touching the code
   CognitoDomainPrefix:
     Type: String
     Default: advitigudagudi-auth
     Description: Unique prefix for the Hosted UI login page.
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  GoogleClientId:
+    Type: String
+    Description: Google OAuth Client ID
+  GoogleClientSecretArn:
+    Type: String
+    Description: Secrets Manager ARN containing the Google client secret JSON (key: clientSecret)
 
 Globals:
   Function:
-    Runtime: nodejs22.x # Using the latest Node.js as requested[cite: 4]
+    Runtime: nodejs20.x
     Architectures:
-      - arm64 # Graviton for 19% better price-performance[cite: 1]
+      - arm64
     Timeout: 30
-    MemorySize: 256
+    MemorySize: 512
+    Tracing: Active
+    Environment:
+      Variables:
+        USERS_TABLE_NAME: !Sub "${AWS::StackName}-users-${Environment}"
+        EVENT_BUS_NAME: !Sub "${AWS::StackName}-PhotoShareBus"
+        DLQ_URL: !Ref AuthServiceDLQ
 
 Resources:
-  # The central event bus for asynchronous microservice communication[cite: 2, 4]
   PhotoShareEventBus:
     Type: AWS::Events::EventBus
     Properties:
       Name: !Sub "${AWS::StackName}-PhotoShareBus"
 
-  # Cognito User Pool: Manages user identities and security policies[cite: 4]
+  AuthServiceDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "auth-service-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600
+
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-users-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: EmailGSI
+          KeySchema:
+            - AttributeName: email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  PostConfirmationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "auth-service-postconfirmation-${Environment}"
+      Handler: handlers/postConfirmation.handler
+      CodeUri: ./
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt AuthServiceDLQ.QueueName
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref PhotoShareEventBus
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/auth-service-postconfirmation-${Environment}:*'
+            - Effect: Allow
+              Action:
+                - xray:PutTraceSegments
+                - xray:PutTelemetryRecords
+              Resource: '*'
+      Environment:
+        Variables:
+          USERS_TABLE_NAME: !Ref UsersTable
+          EVENT_BUS_NAME: !Ref PhotoShareEventBus
+          DLQ_URL: !Ref AuthServiceDLQ
+
+  # Grant Cognito permission to invoke the PostConfirmation Lambda
+  PostConfirmationInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PostConfirmationFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  # Cognito User Pool and related resources
   UserPool:
     Type: AWS::Cognito::UserPool
     Properties:
       UserPoolName: !Sub "${AWS::StackName}-user-pool"
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
+      LambdaConfig:
+        PostConfirmation: !GetAtt PostConfirmationFunction.Arn
       Policies:
         PasswordPolicy:
           MinimumLength: 8
@@ -39,40 +125,63 @@ Resources:
           RequireNumbers: true
           RequireSymbols: true
 
-  # Hosted UI Domain: MUST be globally unique in the region[cite: 4]
   UserPoolDomain:
     Type: AWS::Cognito::UserPoolDomain
     Properties:
-      # Appending AccountId ensures global uniqueness for the domain[cite: 4]
       Domain: !Sub "${CognitoDomainPrefix}-${AWS::AccountId}"
       UserPoolId: !Ref UserPool
 
-  # App Client: The interface between the React frontend and Cognito[cite: 4]
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:
       ClientName: web-client
       UserPoolId: !Ref UserPool
-      # Security: Prevents hackers from guessing valid emails[cite: 4]
       PreventUserExistenceErrors: ENABLED
       ExplicitAuthFlows:
         - ALLOW_USER_AUTH
         - ALLOW_USER_SRP_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
+      SupportedIdentityProviders:
+        - COGNITO
+        - Google
+      CallbackURLs: []
+      LogoutURLs: []
+
+  # Google Identity Provider (uses dynamic Secrets Manager reference for client secret)
+  GoogleIdentityProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Properties:
+      ProviderName: Google
+      ProviderType: Google
+      UserPoolId: !Ref UserPool
+      ProviderDetails:
+        client_id: !Ref GoogleClientId
+        client_secret: !Join ['', ['{{resolve:secretsmanager:', !Ref GoogleClientSecretArn, ':SecretString:clientSecret}}']]
+        authorize_scopes: 'profile email openid'
 
 Outputs:
-  # Exporting these values allows other stacks (Photo/Calendar) to import them[cite: 1, 4]
   UserPoolId:
     Value: !Ref UserPool
     Export:
       Name: !Sub "${AWS::StackName}-UserPoolId"
-  
-  PhotoShareEventBusArn:
-    Value: !GetAtt PhotoShareEventBus.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-PhotoShareEventBusArn"
 
-  PhotoShareEventBusName:
+  UserPoolArn:
+    Value: !GetAtt UserPool.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-UserPoolArn"
+
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+    Export:
+      Name: !Sub "${AWS::StackName}-UserPoolClientId"
+
+  HostedUIDomain:
+    Description: Hosted UI domain (use for Google redirect)
+    Value: !GetAtt UserPoolDomain.Domain
+    Export:
+      Name: !Sub "${AWS::StackName}-HostedUIDomain"
+
+  PhotoShareBusName:
     Value: !GetAtt PhotoShareEventBus.Name
     Export:
-      Name: !Sub "${AWS::StackName}-PhotoShareEventBusName"
+      Name: !Sub "${AWS::StackName}-PhotoShareBusName"

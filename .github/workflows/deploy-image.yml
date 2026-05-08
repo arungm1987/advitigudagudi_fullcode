@@ -70,8 +70,11 @@ jobs:
 
       - name: Deploy with SAM (image template)
         run: |
+          # Ensure SAM CLI does not pick a local named profile (samconfig.toml)
+          export AWS_PROFILE=
           sam deploy --template-file user-microservice/template-image.yaml \
             --stack-name advitigudagudi-stack \
+            --region $AWS_REGION \
             --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
             --parameter-overrides \
               PostConfirmationImage=${{ env.ECR_POSTCONFIRM_REPO }}:${{ github.sha }} \

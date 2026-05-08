@@ -92,3 +92,22 @@ jobs:
           if [ -f user-microservice/samconfig.toml.bak ]; then
             mv user-microservice/samconfig.toml.bak user-microservice/samconfig.toml
           fi
+
+        - name: Collect CloudFormation diagnostics on failure
+          if: failure()
+          env:
+            AWS_REGION: ${{ env.AWS_REGION }}
+          run: |
+            echo "== CloudFormation stack events (latest 50) =="
+            aws cloudformation describe-stack-events --stack-name advitigudagudi-stack --region $AWS_REGION --max-items 50 || true
+            echo "\n== CloudFormation stacks =="
+            aws cloudformation describe-stacks --stack-name advitigudagudi-stack --region $AWS_REGION || true
+            echo "\n== List change sets for stack (if any) =="
+            aws cloudformation list-change-sets --stack-name advitigudagudi-stack --region $AWS_REGION || true
+            echo "\n== Describe change sets (if found) =="
+            CS=$(aws cloudformation list-change-sets --stack-name advitigudagudi-stack --region $AWS_REGION --query 'Summaries[0].ChangeSetName' --output text || true)
+            if [ -n "$CS" ] && [ "$CS" != "None" ]; then
+              aws cloudformation describe-change-set --change-set-name "$CS" --stack-name advitigudagudi-stack --region $AWS_REGION || true
+            else
+              echo "No change set found or none available."
+            fi

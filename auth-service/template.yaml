@@ -29,6 +29,7 @@ Resources:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: advitigudagudi-auth-users-dev
+
       BillingMode: PAY_PER_REQUEST
 
       AttributeDefinitions:
@@ -93,12 +94,16 @@ Resources:
     Type: AWS::Cognito::UserPoolIdentityProvider
     Properties:
       ProviderName: Google
+
       ProviderType: Google
+
       UserPoolId: !Ref UserPool
 
       ProviderDetails:
         client_id: !Ref GoogleClientId
+
         client_secret: !Sub "{{resolve:secretsmanager:${GoogleClientSecretArn}:SecretString:clientSecret}}"
+
         authorize_scopes: "email openid profile"
 
       AttributeMapping:
@@ -113,6 +118,7 @@ Resources:
 
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
+
     DependsOn:
       - GoogleIdentityProvider
 
@@ -156,10 +162,11 @@ Resources:
     Type: AWS::Cognito::UserPoolDomain
     Properties:
       Domain: !Sub "advitigudagudi-auth-${AWS::AccountId}"
+
       UserPoolId: !Ref UserPool
 
   #########################################################
-  # Lambda Role
+  # Lambda IAM Role
   #########################################################
 
   PostConfirmationFunctionRole:
@@ -195,6 +202,13 @@ Resources:
 
                 Resource: !GetAtt UsersTable.Arn
 
+              - Effect: Allow
+
+                Action:
+                  - sqs:SendMessage
+
+                Resource: !GetAtt AuthServiceDLQ.Arn
+
   #########################################################
   # Lambda Function
   #########################################################
@@ -217,13 +231,16 @@ Resources:
 
       DeadLetterQueue:
         Type: SQS
+
         TargetArn: !GetAtt AuthServiceDLQ.Arn
 
       Events:
         CognitoPostConfirmation:
           Type: Cognito
+
           Properties:
             UserPool: !Ref UserPool
+
             Trigger: PostConfirmation
 
   #########################################################
@@ -234,23 +251,29 @@ Resources:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref PostConfirmationFunction
+
       Action: lambda:InvokeFunction
+
       Principal: cognito-idp.amazonaws.com
+
       SourceArn: !GetAtt UserPool.Arn
 
 Outputs:
   CognitoUserPoolId:
     Value: !Ref UserPool
+
     Export:
       Name: CognitoUserPoolId
 
   CognitoUserPoolArn:
     Value: !GetAtt UserPool.Arn
+
     Export:
       Name: CognitoUserPoolArn
 
   CognitoUserPoolClientId:
     Value: !Ref UserPoolClient
+
     Export:
       Name: CognitoUserPoolClientId
 
@@ -259,20 +282,24 @@ Outputs:
 
   UsersTableName:
     Value: !Ref UsersTable
+
     Export:
       Name: UsersTableName
 
   PhotoShareBusName:
     Value: !Ref PhotoShareEventBus
+
     Export:
       Name: PhotoShareBusName
 
   PhotoShareBusArn:
     Value: !GetAtt PhotoShareEventBus.Arn
+
     Export:
       Name: PhotoShareBusArn
 
   DLQUrl:
     Value: !Ref AuthServiceDLQ
+
     Export:
       Name: AuthServiceDLQUrl

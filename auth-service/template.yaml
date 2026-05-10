@@ -73,12 +73,6 @@ Resources:
       UsernameAttributes:
         - email
 
-      Schema:
-        - Name: email
-          Required: true
-          Mutable: true
-          AttributeDataType: String
-
       Policies:
         PasswordPolicy:
           MinimumLength: 8

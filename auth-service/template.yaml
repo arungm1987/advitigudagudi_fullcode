@@ -1,54 +1,29 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 
-Description: Auth Service - Cognito + PostConfirmation + EventBridge
+Description: Advitigudagudi Auth Service - Foundation
 
 Parameters:
-  Environment:
-    Type: String
-    Default: dev
-
   GoogleClientId:
     Type: String
     Description: Google OAuth Client ID
 
   GoogleClientSecretArn:
     Type: String
-    Description: "AWS Secrets Manager ARN containing Google client secret JSON (key: clientSecret)"
+    Description: ARN of Google client secret in Secrets Manager
 
 Globals:
   Function:
     Runtime: nodejs20.x
+    Timeout: 30
+    MemorySize: 256
     Architectures:
       - arm64
-    Timeout: 30
-    MemorySize: 512
-    Tracing: Active
 
 Resources:
-
-  #############################################
-  # EventBridge Bus
-  #############################################
-
-  PhotoShareEventBus:
-    Type: AWS::Events::EventBus
-    Properties:
-      Name: advitigudagudi-auth-PhotoShareBus
-
-  #############################################
-  # DLQ
-  #############################################
-
-  AuthServiceDLQ:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: auth-service-dlq-dev
-      MessageRetentionPeriod: 1209600
-
-  #############################################
+  #########################################################
   # DynamoDB
-  #############################################
+  #########################################################
 
   UsersTable:
     Type: AWS::DynamoDB::Table
@@ -59,100 +34,201 @@ Resources:
       AttributeDefinitions:
         - AttributeName: userId
           AttributeType: S
-        - AttributeName: email
-          AttributeType: S
 
       KeySchema:
         - AttributeName: userId
           KeyType: HASH
 
-      GlobalSecondaryIndexes:
-        - IndexName: EmailGSI
-          KeySchema:
-            - AttributeName: email
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
+  #########################################################
+  # EventBridge
+  #########################################################
 
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: true
-
-  #############################################
-  # Lambda Function
-  #############################################
-
-  PostConfirmationFunction:
-    Type: AWS::Serverless::Function
+  PhotoShareEventBus:
+    Type: AWS::Events::EventBus
     Properties:
-      FunctionName: auth-service-postconfirmation-dev
+      Name: advitigudagudi-auth-PhotoShareBus
 
-      CodeUri: ./
+  #########################################################
+  # DLQ
+  #########################################################
 
-      Handler: dist/handlers/postConfirmation.handler
+  AuthServiceDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: auth-service-dlq-dev
 
-      Environment:
-        Variables:
-          USERS_TABLE_NAME: !Ref UsersTable
-          DLQ_URL: !Ref AuthServiceDLQ
-          EVENT_BUS_NAME: !Ref PhotoShareEventBus
-
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref UsersTable
-
-        - SQSSendMessagePolicy:
-            QueueName: !GetAtt AuthServiceDLQ.QueueName
-
-        - Statement:
-            - Effect: Allow
-              Action:
-                - events:PutEvents
-              Resource: !GetAtt PhotoShareEventBus.Arn
-
-        - Statement:
-            - Effect: Allow
-              Action:
-                - logs:CreateLogGroup
-                - logs:CreateLogStream
-                - logs:PutLogEvents
-              Resource: "*"
-
-        - Statement:
-            - Effect: Allow
-              Action:
-                - xray:PutTraceSegments
-                - xray:PutTelemetryRecords
-              Resource: "*"
-
-  #############################################
+  #########################################################
   # Cognito User Pool
-  #############################################
+  #########################################################
 
   UserPool:
     Type: AWS::Cognito::UserPool
     Properties:
-      UserPoolName: advitigudagudi-auth-user-pool
-
-      UsernameAttributes:
-        - email
+      UserPoolName: advitigudagudi-user-pool
 
       AutoVerifiedAttributes:
         - email
 
+      UsernameAttributes:
+        - email
+
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+
       Policies:
         PasswordPolicy:
           MinimumLength: 8
-          RequireUppercase: true
           RequireLowercase: true
           RequireNumbers: true
-          RequireSymbols: true
+          RequireSymbols: false
+          RequireUppercase: true
 
-      LambdaConfig:
-        PostConfirmation: !GetAtt PostConfirmationFunction.Arn
+  #########################################################
+  # Google Identity Provider
+  #########################################################
 
-  #############################################
-  # Allow Cognito to Invoke Lambda
-  #############################################
+  GoogleIdentityProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Properties:
+      ProviderName: Google
+      ProviderType: Google
+      UserPoolId: !Ref UserPool
+
+      ProviderDetails:
+        client_id: !Ref GoogleClientId
+        client_secret: !Sub "{{resolve:secretsmanager:${GoogleClientSecretArn}:SecretString:clientSecret}}"
+        authorize_scopes: "email openid profile"
+
+      AttributeMapping:
+        email: email
+        given_name: given_name
+        family_name: family_name
+        name: name
+
+  #########################################################
+  # Cognito App Client
+  #########################################################
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn:
+      - GoogleIdentityProvider
+
+    Properties:
+      ClientName: advitigudagudi-client
+
+      UserPoolId: !Ref UserPool
+
+      GenerateSecret: false
+
+      SupportedIdentityProviders:
+        - COGNITO
+        - Google
+
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+
+      AllowedOAuthFlowsUserPoolClient: true
+
+      AllowedOAuthFlows:
+        - implicit
+
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+
+      CallbackURLs:
+        - http://localhost:3000
+
+      LogoutURLs:
+        - http://localhost:3000
+
+  #########################################################
+  # Cognito Domain
+  #########################################################
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "advitigudagudi-auth-${AWS::AccountId}"
+      UserPoolId: !Ref UserPool
+
+  #########################################################
+  # Lambda Role
+  #########################################################
+
+  PostConfirmationFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+
+        Statement:
+          - Effect: Allow
+
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+
+            Action:
+              - sts:AssumeRole
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+      Policies:
+        - PolicyName: DynamoWritePolicy
+
+          PolicyDocument:
+            Version: "2012-10-17"
+
+            Statement:
+              - Effect: Allow
+
+                Action:
+                  - dynamodb:PutItem
+
+                Resource: !GetAtt UsersTable.Arn
+
+  #########################################################
+  # Lambda Function
+  #########################################################
+
+  PostConfirmationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: advitigudagudi-post-confirmation
+
+      CodeUri: ./
+
+      Handler: dist/postConfirmation.handler
+
+      Role: !GetAtt PostConfirmationFunctionRole.Arn
+
+      Environment:
+        Variables:
+          USERS_TABLE: !Ref UsersTable
+          EVENT_BUS_NAME: !Ref PhotoShareEventBus
+
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt AuthServiceDLQ.Arn
+
+      Events:
+        CognitoPostConfirmation:
+          Type: Cognito
+          Properties:
+            UserPool: !Ref UserPool
+            Trigger: PostConfirmation
+
+  #########################################################
+  # Lambda Permission
+  #########################################################
 
   PostConfirmationInvokePermission:
     Type: AWS::Lambda::Permission
@@ -162,87 +238,7 @@ Resources:
       Principal: cognito-idp.amazonaws.com
       SourceArn: !GetAtt UserPool.Arn
 
-  #############################################
-  # Google Identity Provider
-  #############################################
-
-  GoogleIdentityProvider:
-    Type: AWS::Cognito::UserPoolIdentityProvider
-    Properties:
-      ProviderName: Google
-      ProviderType: Google
-
-      UserPoolId: !Ref UserPool
-
-      ProviderDetails:
-        client_id: !Ref GoogleClientId
-        client_secret: !Sub "{{resolve:secretsmanager:${GoogleClientSecretArn}:SecretString:clientSecret}}"
-        authorize_scopes: "openid email profile"
-
-      AttributeMapping:
-        email: email
-        given_name: given_name
-        family_name: family_name
-        picture: picture
-
-  #############################################
-  # User Pool Client
-  #############################################
-
-  UserPoolClient:
-    Type: AWS::Cognito::UserPoolClient
-
-    DependsOn:
-      - GoogleIdentityProvider
-
-    Properties:
-      UserPoolId: !Ref UserPool
-
-      ClientName: web-client
-
-      GenerateSecret: false
-
-      ExplicitAuthFlows:
-        - ALLOW_USER_AUTH
-        - ALLOW_USER_SRP_AUTH
-        - ALLOW_REFRESH_TOKEN_AUTH
-
-      SupportedIdentityProviders:
-        - COGNITO
-        - Google
-
-      CallbackURLs:
-        - http://localhost:5173/auth/callback
-
-      LogoutURLs:
-        - http://localhost:5173
-
-      AllowedOAuthFlowsUserPoolClient: true
-
-      AllowedOAuthFlows:
-        - code
-
-      AllowedOAuthScopes:
-        - openid
-        - email
-        - profile
-
-  #############################################
-  # Cognito Domain
-  #############################################
-
-  UserPoolDomain:
-    Type: AWS::Cognito::UserPoolDomain
-
-    DependsOn:
-      - UserPoolClient
-
-    Properties:
-      Domain: !Sub "advitigudagudi-auth-${AWS::AccountId}"
-      UserPoolId: !Ref UserPool
-
 Outputs:
-
   CognitoUserPoolId:
     Value: !Ref UserPool
     Export:
@@ -259,7 +255,7 @@ Outputs:
       Name: CognitoUserPoolClientId
 
   CognitoDomain:
-    Value: !Sub "https://advitigudagudi-auth-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com"
+    Value: !Sub "https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
 
   UsersTableName:
     Value: !Ref UsersTable

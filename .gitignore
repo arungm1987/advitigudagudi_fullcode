@@ -17,6 +17,8 @@ credentials
 *.crt
 secrets.json
 .serverless/
+# SAM
+.aws-sam/
 
 # OS / IDE
 .DS_Store
@@ -31,3 +33,14 @@ pnpm-debug.log*
 
 # Docker
 .dockerignore
+
+# Node
+node_modules/
+dist/
+
+# Env
+.env
+.env.local
+
+# Logs
+*.log

@@ -1,12 +1,11 @@
-import { BrowserRouter } from 'react-router-dom'
-import AppRoutes from './routes'
+import AuthBootstrap from "./features/auth/AuthBootstrap";
 
 function App() {
   return (
-    <BrowserRouter>
-      <AppRoutes />
-    </BrowserRouter>
-  )
+    <div>
+      <AuthBootstrap />
+    </div>
+  );
 }
 
-export default App
+export default App;

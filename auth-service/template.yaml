@@ -1,59 +1,82 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform: AWS::Serverless-2016-10-31
+
+Description: Advitigudagudi Authentication Service
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+
+    Timeout: 30
+
+    MemorySize: 256
+
+Parameters:
+  GoogleClientId:
+    Type: String
+
+    Default: 769749190788-9kepmg0ge3ibavp9it6quqjdos52df1u.apps.googleusercontent.com
+
 Resources:
   #########################################################
-  # Existing Resources
-  #########################################################
-
-  UserTable:
-    Type: AWS::DynamoDB::Table
-
-    Properties:
-      TableName: advitigudagudi-users
-
-      BillingMode: PAY_PER_REQUEST
-
-      AttributeDefinitions:
-        - AttributeName: userId
-          AttributeType: S
-
-      KeySchema:
-        - AttributeName: userId
-          KeyType: HASH
-
-  UserEventsDLQ:
-    Type: AWS::SQS::Queue
-
-    Properties:
-      QueueName: advitigudagudi-user-events-dlq
-
-  UserEventBus:
-    Type: AWS::Events::EventBus
-
-    Properties:
-      Name: advitigudagudi-user-event-bus
-
-  #########################################################
-  # Cognito
+  # Cognito User Pool
   #########################################################
 
   UserPool:
     Type: AWS::Cognito::UserPool
 
     Properties:
-      UserPoolName: advitigudagudi-user-pool
+      UserPoolName: advitigudagudi-users
 
       AutoVerifiedAttributes:
         - email
 
-      LambdaConfig:
-        PostConfirmation: !GetAtt PostConfirmationFunction.Arn
+      UsernameAttributes:
+        - email
+
+  #########################################################
+  # Google Identity Provider
+  #########################################################
+
+  GoogleIdentityProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+
+    Properties:
+      ProviderName: Google
+
+      ProviderType: Google
+
+      UserPoolId: !Ref UserPool
+
+      AttributeMapping:
+        email: email
+
+        given_name: given_name
+
+        family_name: family_name
+
+      ProviderDetails:
+        client_id: !Ref GoogleClientId
+
+        client_secret: !Sub "{{resolve:secretsmanager:advitigudagudi/google-client-secret:SecretString}}"
+
+        authorize_scopes: "openid email profile"
+
+  #########################################################
+  # User Pool Client
+  #########################################################
 
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
 
-    Properties:
-      ClientName: advitigudagudi-user-pool-client
+    DependsOn:
+      - GoogleIdentityProvider
 
+    Properties:
       UserPoolId: !Ref UserPool
+
+      ClientName: advitigudagudi-client
 
       GenerateSecret: false
 
@@ -63,8 +86,8 @@ Resources:
         - code
 
       AllowedOAuthScopes:
-        - openid
         - email
+        - openid
         - profile
 
       SupportedIdentityProviders:
@@ -79,149 +102,56 @@ Resources:
         - http://localhost:3000
         - https://d18mnuhklzfs5r.cloudfront.net
 
-  GoogleIdentityProvider:
-    Type: AWS::Cognito::UserPoolIdentityProvider
+  #########################################################
+  # Cognito Domain
+  #########################################################
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
 
     Properties:
-      ProviderName: Google
-
-      ProviderType: Google
+      Domain: advitigudagudi-auth-dev
 
       UserPoolId: !Ref UserPool
 
-      ProviderDetails:
-        client_id: "{{resolve:ssm:/advitigudagudi/google/client/id}}"
-        client_secret: "{{resolve:ssm:/advitigudagudi/google/client/secret}}"
-        authorize_scopes: "openid email profile"
-
-      AttributeMapping:
-        email: email
-        given_name: given_name
-        family_name: family_name
-        name: name
-
   #########################################################
-  # IAM Roles
-  #########################################################
-
-  PostConfirmationFunctionRole:
-    Type: AWS::IAM::Role
-
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-
-        Statement:
-          - Effect: Allow
-
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-
-            Action:
-              - sts:AssumeRole
-
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-
-      Policies:
-        - PolicyName: PostConfirmationPolicy
-
-          PolicyDocument:
-            Version: "2012-10-17"
-
-            Statement:
-              - Effect: Allow
-
-                Action:
-                  - dynamodb:PutItem
-
-                Resource: !GetAtt UserTable.Arn
-
-              - Effect: Allow
-
-                Action:
-                  - events:PutEvents
-
-                Resource: !GetAtt UserEventBus.Arn
-
-  #########################################################
-  # NEW ROLE FOR PROTECTED API
-  #########################################################
-
-  GetCurrentUserFunctionRole:
-    Type: AWS::IAM::Role
-
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-
-        Statement:
-          - Effect: Allow
-
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-
-            Action:
-              - sts:AssumeRole
-
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-
-  #########################################################
-  # Existing Lambda
+  # Post Confirmation Lambda
   #########################################################
 
   PostConfirmationFunction:
     Type: AWS::Serverless::Function
 
     Properties:
-      FunctionName: advitigudagudi-post-confirmation
+      Handler: src/handlers/postConfirmation.handler
 
-      CodeUri: ./
+      CodeUri: .
 
-      Handler: dist/handlers/postConfirmation.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
 
-      Runtime: nodejs20.x
+      Events:
+        PostConfirmation:
+          Type: Cognito
 
-      Timeout: 10
+          Properties:
+            UserPool: !Ref UserPool
 
-      MemorySize: 256
-
-      Role: !GetAtt PostConfirmationFunctionRole.Arn
-
-      Environment:
-        Variables:
-          USER_TABLE_NAME: !Ref UserTable
-          EVENT_BUS_NAME: !Ref UserEventBus
+            Trigger: PostConfirmation
 
   #########################################################
-  # NEW PROTECTED AUTH API
+  # Get Current User Lambda
   #########################################################
 
   GetCurrentUserFunction:
     Type: AWS::Serverless::Function
 
     Properties:
-      FunctionName: advitigudagudi-get-current-user
+      Handler: src/handlers/getCurrentUser.handler
 
-      CodeUri: ./
+      CodeUri: .
 
-      Handler: dist/handlers/getCurrentUser.handler
-
-      Runtime: nodejs20.x
-
-      Timeout: 10
-
-      MemorySize: 256
-
-      Role: !GetAtt GetCurrentUserFunctionRole.Arn
-
-      Environment:
-        Variables:
-          COGNITO_USER_POOL_ID: !Ref UserPool
-          COGNITO_APP_CLIENT_ID: !Ref UserPoolClient
+      Policies:
+        - AWSLambdaBasicExecutionRole
 
       Events:
         GetCurrentUserApi:
@@ -229,21 +159,12 @@ Resources:
 
           Properties:
             Path: /auth/me
+
             Method: GET
 
 Outputs:
-  #########################################################
-  # Existing Outputs
-  #########################################################
-
   UserPoolId:
     Value: !Ref UserPool
 
-    Export:
-      Name: UserPoolId
-
   UserPoolClientId:
     Value: !Ref UserPoolClient
-
-    Export:
-      Name: UserPoolClientId

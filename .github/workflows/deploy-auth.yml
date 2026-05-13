@@ -36,7 +36,7 @@ jobs:
         uses: actions/setup-node@v4
 
         with:
-          node-version: 22
+          node-version: 20
 
       #########################################################
       # Setup SAM
@@ -62,7 +62,7 @@ jobs:
       #########################################################
 
       - name: Install Dependencies
-        run: npm install
+        run: npm ci
 
       #########################################################
       # SAM Build

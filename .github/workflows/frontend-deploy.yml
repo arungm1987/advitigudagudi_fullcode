@@ -36,14 +36,14 @@ jobs:
         uses: actions/setup-node@v4
 
         with:
-          node-version: 22
+          node-version: 20
 
       #########################################################
       # Install Dependencies
       #########################################################
 
       - name: Install Dependencies
-        run: npm install
+        run: npm ci
 
       #########################################################
       # Build Frontend

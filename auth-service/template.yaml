@@ -1,5 +1,4 @@
 Resources:
-
   #########################################################
   # Existing Resources
   #########################################################
@@ -20,20 +19,17 @@ Resources:
         - AttributeName: userId
           KeyType: HASH
 
-
   UserEventsDLQ:
     Type: AWS::SQS::Queue
 
     Properties:
       QueueName: advitigudagudi-user-events-dlq
 
-
   UserEventBus:
     Type: AWS::Events::EventBus
 
     Properties:
       Name: advitigudagudi-user-event-bus
-
 
   #########################################################
   # Cognito
@@ -50,7 +46,6 @@ Resources:
 
       LambdaConfig:
         PostConfirmation: !GetAtt PostConfirmationFunction.Arn
-
 
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
@@ -78,10 +73,11 @@ Resources:
 
       CallbackURLs:
         - http://localhost:3000/auth/callback
+        - https://d18mnuhklzfs5r.cloudfront.net/auth/callback
 
       LogoutURLs:
         - http://localhost:3000
-
+        - https://d18mnuhklzfs5r.cloudfront.net
 
   GoogleIdentityProvider:
     Type: AWS::Cognito::UserPoolIdentityProvider
@@ -103,7 +99,6 @@ Resources:
         given_name: given_name
         family_name: family_name
         name: name
-
 
   #########################################################
   # IAM Roles
@@ -150,7 +145,6 @@ Resources:
 
                 Resource: !GetAtt UserEventBus.Arn
 
-
   #########################################################
   # NEW ROLE FOR PROTECTED API
   #########################################################
@@ -174,7 +168,6 @@ Resources:
 
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-
 
   #########################################################
   # Existing Lambda
@@ -202,7 +195,6 @@ Resources:
         Variables:
           USER_TABLE_NAME: !Ref UserTable
           EVENT_BUS_NAME: !Ref UserEventBus
-
 
   #########################################################
   # NEW PROTECTED AUTH API
@@ -239,9 +231,7 @@ Resources:
             Path: /auth/me
             Method: GET
 
-
 Outputs:
-
   #########################################################
   # Existing Outputs
   #########################################################
@@ -252,13 +242,11 @@ Outputs:
     Export:
       Name: UserPoolId
 
-
   UserPoolClientId:
     Value: !Ref UserPoolClient
 
     Export:
       Name: UserPoolClientId
-
 
   #########################################################
   # NEW AUTH ME API OUTPUT

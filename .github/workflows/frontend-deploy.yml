@@ -1,0 +1,150 @@
+name: Frontend Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - development
+      - main
+
+jobs:
+  deploy-development:
+    if: github.ref == 'refs/heads/development'
+
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: shell-app
+
+    steps:
+      #########################################################
+      # Checkout Repository
+      #########################################################
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      #########################################################
+      # Setup Node.js
+      #########################################################
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+
+        with:
+          node-version: 22
+
+      #########################################################
+      # Install Dependencies
+      #########################################################
+
+      - name: Install Dependencies
+        run: npm install
+
+      #########################################################
+      # Build Frontend
+      #########################################################
+
+      - name: Build Frontend
+        run: npm run build
+
+      #########################################################
+      # Configure AWS Credentials
+      #########################################################
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      #########################################################
+      # Upload Build to S3
+      #########################################################
+
+      - name: Upload Build Files
+        run: |
+          aws s3 sync dist s3://dev.advitigudagudi.com --delete
+
+      #########################################################
+      # Invalidate CloudFront Cache
+      #########################################################
+
+      - name: Invalidate CloudFront Cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.DEV_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+  deploy-production:
+    if: github.ref == 'refs/heads/main'
+
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: shell-app
+
+    steps:
+      #########################################################
+      # Checkout Repository
+      #########################################################
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      #########################################################
+      # Setup Node.js
+      #########################################################
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+
+        with:
+          node-version: 22
+
+      #########################################################
+      # Install Dependencies
+      #########################################################
+
+      - name: Install Dependencies
+        run: npm install
+
+      #########################################################
+      # Build Frontend
+      #########################################################
+
+      - name: Build Frontend
+        run: npm run build
+
+      #########################################################
+      # Configure AWS Credentials
+      #########################################################
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      #########################################################
+      # Upload Build to S3
+      #########################################################
+
+      - name: Upload Build Files
+        run: |
+          aws s3 sync dist s3://app.advitigudagudi.com --delete
+
+      #########################################################
+      # Invalidate CloudFront Cache
+      #########################################################
+
+      - name: Invalidate CloudFront Cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.PROD_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"

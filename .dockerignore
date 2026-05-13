@@ -1,0 +1,13 @@
+node_modules
+dist
+build
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+access-key.json
+access-key*.json
+.env
+.env.*
+.aws
+*.log

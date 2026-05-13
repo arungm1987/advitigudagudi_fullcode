@@ -7,6 +7,10 @@ on:
       - main
 
 jobs:
+  #########################################################
+  # Development Deployment
+  #########################################################
+
   deploy-development:
     if: github.ref == 'refs/heads/development'
 
@@ -61,10 +65,10 @@ jobs:
           aws-region: ap-south-1
 
       #########################################################
-      # Upload Build to S3
+      # Upload Frontend Build
       #########################################################
 
-      - name: Upload Build Files
+      - name: Upload Frontend Build
         run: |
           aws s3 sync dist s3://dev.advitigudagudi.com --delete
 
@@ -77,6 +81,10 @@ jobs:
           aws cloudfront create-invalidation \
             --distribution-id ${{ secrets.DEV_CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*"
+
+  #########################################################
+  # Production Deployment
+  #########################################################
 
   deploy-production:
     if: github.ref == 'refs/heads/main'
@@ -132,10 +140,10 @@ jobs:
           aws-region: ap-south-1
 
       #########################################################
-      # Upload Build to S3
+      # Upload Frontend Build
       #########################################################
 
-      - name: Upload Build Files
+      - name: Upload Frontend Build
         run: |
           aws s3 sync dist s3://app.advitigudagudi.com --delete
 

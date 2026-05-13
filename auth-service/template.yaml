@@ -247,12 +247,3 @@ Outputs:
 
     Export:
       Name: UserPoolClientId
-  #########################################################
-  # NEW AUTH ME API OUTPUT
-  #########################################################
-
-  AuthMeApi:
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/auth/me"
-
-    Export:
-      Name: AuthMeApi

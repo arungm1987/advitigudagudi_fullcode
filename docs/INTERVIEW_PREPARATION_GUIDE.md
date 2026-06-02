@@ -1,566 +1,266 @@
-# Senior Architect Interview Preparation Guide
-## Advitigudagudi: Production-Grade AWS Serverless Microservices
+# Advitigudagudi Interview Preparation Guide
 
----
+Use this guide together with `docs/PROJECT_CONTEXT.md`. It is intentionally self-contained so the rest of the old `docs/` folder can be deleted after this cleanup.
 
-## Part 1: 30-Second Elevator Pitch
+## 30-Second Pitch
 
-**"Advitigudagudi is a production-grade serverless microservices platform on AWS. Four independently deployable services: Auth (Cognito + PostConfirmation Lambda), User (DynamoDB + EventBridge), Photo Sharing (S3 presigned URLs + metadata indexing), and Calendar (Chime SDK integration). All services communicate asynchronously through EventBridge, validate JWTs at the API Gateway authorizer layer, and implement consistent error handling with SQS DLQ capture for resilience. The entire system is infrastructure-as-code using AWS SAM, deployed on arm64 Graviton Lambda for 19% better price-performance."**
+Advitigudagudi is an interview preparation and portfolio platform built as a production-style AWS serverless system. The frontend is a React, TypeScript, Vite microfrontend shell deployed through S3, CloudFront, Route53, and GitHub Actions. The backend uses Cognito, API Gateway, Lambda, DynamoDB, EventBridge, SQS failure capture, and SAM. The architecture is designed to demonstrate secure authentication, event-driven service boundaries, scalable uploads, CI/CD, and clear operational practices.
 
----
+## Current Architecture Story
 
-## Part 2: Core Architecture Questions & Answers
+The platform is split into independently understandable services:
 
-### Q1: "Walk me through your authentication flow. How do native and Google OAuth work?"
+- Auth: Cognito Hosted UI, native username/password, Google federation, and backend session handling.
+- User: Cognito PostConfirmation side effects, DynamoDB profile creation, and `USER_CREATED` event publishing.
+- Photo: planned service for browser-direct S3 uploads through presigned URLs, photo metadata, and sharing events.
+- Calendar: planned service for meeting metadata and learning-friendly free meeting-tool integration.
+- Frontend shell: React host microfrontend that coordinates auth state, protected routes, and remote MFEs.
 
-**Answer (Production-grade response):**
+The system uses EventBridge as the asynchronous backbone. User Service publishes `USER_CREATED`; Photo and Calendar services can subscribe and build local user indexes for email-to-userId lookups. Failures are captured through SQS so operational recovery is possible without losing important events.
 
-"Cognito User Pool is the single source of truth for identity. Both native email/password and Google OAuth flow through the same Cognito Hosted UI — the frontend never touches authentication logic directly.
+## Authentication: Explain Both Patterns
 
-**Native flow:**
-1. User enters email and password on Cognito Hosted UI
-2. Cognito sends an email verification code
-3. User verifies the code (PostConfirmation_ConfirmSignUp triggerSource)
-4. PostConfirmation Lambda fires, reads userAttributes, creates DynamoDB profile, publishes USER_CREATED event
+### Pattern 1: Bearer JWT With API Gateway Authorizer
 
-**Google OAuth flow:**
-1. User clicks 'Sign in with Google' on Cognito Hosted UI
-2. Cognito federates with Google Identity Provider
-3. User authenticates with Google
-4. Google returns ID token to Cognito
-5. Cognito auto-confirms the account (PostConfirmation_ConfirmFederatedIdentity triggerSource)
-6. Same PostConfirmation Lambda fires with identical downstream actions
+Flow:
 
-**Key design decisions:**
-- Single Cognito User Pool for both flows eliminates duplicate login logic
-- PostConfirmation has an allowlist guard checking triggerSource — we only process ConfirmSignUp and ConfirmFederatedIdentity, rejecting unknown sources
-- Name fallback chain: explicit name field → given_name + family_name concatenated → email local-part. This handles Google users who might not have a full name
-- Token lifetimes: 60-minute access/ID tokens, 30-day refresh tokens
-- PreventUserExistenceErrors enabled so login form never leaks whether an email is registered"
-
----
-
-### Q2: "How do you handle service-to-service communication without tight coupling?"
-
-**Answer:**
-
-"EventBridge is our backbone. Instead of services calling each other directly, we publish domain events.
-
-**Example: Photo Service needs to know about new users**
-1. User Service publishes USER_CREATED event to EventBridge custom bus with source='photoshare.users', detailType='USER_CREATED', and a structured payload with userId, email, displayName, timestamp, schemaVersion
-2. Photo Service has an EventBridge rule subscribed to that event pattern
-3. When USER_CREATED fires, EventBridge invokes a Lambda (syncUserIndex) that writes the user to Photo Service's local user index table
-4. Photo Service now has the user available for email-to-userId lookups on photo sharing operations
-
-**Why this pattern?**
-- **Decoupling:** Photo Service doesn't know User Service exists. They interact only through events
-- **Resilience:** If Photo Service is down, User Service still completes. When Photo Service comes back online, it catches up (though we'd need a replay mechanism for historical events)
-- **Scalability:** New services can subscribe to the same event without modifying User Service
-- **Observability:** Every event has a schemaVersion (e.g., USER_CREATED v1.0). If we need to evolve the event schema, we bump the version and handle both old and new formats
-
-**SQS DLQ pattern:** If a Lambda fails to process an event, EventBridge retries with exponential backoff, then sends to a DLQ. We monitor the DLQ and replay messages when the service recovers."
-
----
-
-### Q3: "How do you handle photo uploads from the browser?"
-
-**Answer:**
-
-"Direct S3 uploads using presigned URLs. This is critical for performance and scalability.
-
-**Traditional approach (❌ slow, unscalable):**
-1. Browser sends file to Lambda
-2. Lambda streams file to S3
-3. Lambda is blocked during upload
-4. Expensive memory/time on Lambda
-
-**Our approach (✓ fast, scalable):**
-1. Browser calls /v1/photos/presigned-url with metadata (title, description, contentType)
-2. Lambda generates photoId (UUID), creates S3 PutObjectCommand with Metadata headers (photoId, userId), generates presigned URL (15-minute expiry)
-3. Lambda pre-registers photoId in DynamoDB with status=PENDING_UPLOAD and a 24-hour expiration
-4. Lambda returns presignedUrl to browser
-5. Browser signs directly with S3 using the presigned URL
-6. S3 stores object with metadata headers
-7. Browser calls /v1/photos/{photoId}/finalize to mark status=CONFIRMED (optional, or auto-confirm on S3 upload completion via S3 events)
-
-**Benefits:**
-- Lambda is stateless and fast (just DynamoDB write + presigned URL generation)
-- Presigned URLs are time-bound (15 minutes)
-- If browser disconnects mid-upload, S3 cleans up (we set an abort lifecycle rule)
-- Pre-registration in DynamoDB means we already have the metadata, just waiting for file confirmation
-- Browser sees instant feedback (presigned URL generated in <200ms)
-- We can scale to millions of concurrent uploads without scaling Lambda"
-
----
-
-### Q4: "How does your Calendar + Chime integration work?"
-
-**Answer:**
-
-"Deferred Chime session creation pattern — we create the meeting metadata in DynamoDB immediately, but only invoke Chime SDK when a user actually joins.
-
-**createMeeting flow:**
-1. Frontend: POST /v1/meetings with title, scheduledTime, attendeeUserIds/emails
-2. Lambda validates future scheduledTime, resolves emails to userIds via user index table
-3. Lambda calls Chime SDK: CreateMeeting (creates a Chime meeting session)
-4. Lambda stores meeting metadata in DynamoDB: meetingId, chimeMeetingId, attendees, status=SCHEDULED
-5. Lambda emits MEETING_SCHEDULED event to EventBridge
-6. Lambda returns meetingId and chimeMeetingId to frontend
-7. Frontend stores these and shares with attendees
-
-**joinMeeting flow:**
-1. Frontend: POST /v1/meetings/{meetingId}/join (with JWT)
-2. Lambda fetches meeting metadata, verifies user is organizer or attendee
-3. Lambda calls Chime SDK: CreateAttendee (generates unique attendeeId and joinToken for this user)
-4. Lambda returns joinToken and attendeeId to frontend
-5. Frontend uses Chime SDK JavaScript client to initialize meeting with the joinToken
-6. Browser connects directly to Chime media infrastructure
-
-**Why deferred attendee creation?**
-- Avoids creating Chime attendee objects for users who never show up
-- Keeps createMeeting fast (just metadata, no Chime call)
-- Users who are invited see meeting details before joining
-- If user drops and rejoins, we can regenerate a token (idempotent)
-
-**Why Chime SDK matters:**
-- Avoids streaming audio/video through our Lambda
-- Chime has SFU (Selective Forwarding Unit) architecture — only sends streams you're actually watching
-- Chime handles encryption, NAT traversal, codec negotiation
-- We just orchestrate: create meeting, generate tokens, track who's in the room"
-
----
-
-### Q5: "How do you ensure data consistency and handle failures?"
-
-**Answer:**
-
-"Multi-layered approach:
-
-**1. Idempotency:**
-- Every write uses DynamoDB PutCommand or UpdateCommand with appropriate conditions
-- Pre-signed URL generation: if request repeats with same idempotencyKey, we hash it to the same photoId and return the same presigned URL
-- Sharing a photo with the same user twice uses a Set to deduplicate
-
-**2. DLQ Capture:**
-- PostConfirmation failures: captured to SQS queue with 14-day retention. Message includes userId, email, triggerSource, error details
-- Photo/Calendar operation failures: same pattern
-- Operators monitor DLQ and manually replay messages when root cause is fixed
-
-**3. Event Sourcing via EventBridge:**
-- Every significant state change is published as an event (USER_CREATED, PHOTO_SHARED, MEETING_SCHEDULED)
-- Events have schemaVersion. If schema evolves, we can handle both old and new
-- Events are queryable in CloudWatch Logs
-
-**4. DynamoDB Streams (not currently used but ready):**
-- Tables have StreamSpecification: NEW_AND_OLD_IMAGES
-- If we need to replicate data elsewhere (Elasticsearch, Analytics), we can subscribe to streams
-
-**5. JWT Validation at Gateway:**
-- API Gateway authorizer validates JWT signature against Cognito User Pool public keys
-- No need to validate in Lambda — claims are pre-validated
-- If token is expired or forged, request never reaches Lambda (saves cold start)
-
-**6. Structured Logging:**
-- Every Lambda logs JSON with consistent fields: action, requestId, userId, service, durationMs
-- CloudWatch Logs Insights queries: `fields @timestamp, action, durationMs | stats avg(durationMs) by action`
-- X-Ray tracing enabled — can see latency breakdown across AWS services"
-
----
-
-### Q6: "How do you scale this architecture?"
-
-**Answer:**
-
-"Serverless-first means scaling is mostly automatic.
-
-**Lambda:**
-- AWS manages concurrency. Each account gets 1000 concurrent executions (soft limit, easily increased)
-- On production, we'd set reserved concurrency per function to guarantee minimum throughput
-- Arm64 Graviton processors cost 20% less than x86
-
-**DynamoDB:**
-- Pay-per-request billing means no provisioning
-- Scales to millions of read/write units automatically
-- If we had hot keys (e.g., a celebrity's photos), we'd partition by userId prefix
-- Point-in-time recovery enabled for disaster recovery
-
-**S3:**
-- Request rate: 3,500 PUT/DELETE per second per partition key (photoId prefix)
-- We partition by userId: s3://bucket/photos/{userId}/{photoId}
-- Each user is a separate partition, so we can sustain 3,500 uploads per user concurrently
-- CloudFront cache for photo GET requests (cache-control: max-age=31536000 on versioned objects)
-
-**EventBridge:**
-- Handles thousands of events per second natively
-- DLQ and retry policy ensures no message loss
-- We can add more subscribers without touching existing ones
-
-**Database:**
-- Cognito: AWS manages. No scaling needed
-- Chime: AWS manages backend. We just generate tokens and let Chime route media
-
-**Bottlenecks (and mitigations):**
-- Cognito rate limits: ~100 authentication requests per second per User Pool (can request increase)
-- Single Cognito User Pool for all services: consider multi-tenant partitioning if we have thousands of customers
-- Email sending (PostConfirmation verification emails): use SES quotas (initially 50/sec, can increase)"
-
----
-
-## Part 3: Deep Technical Questions
-
-### Q: "Tell me about your IAM strategy. How do you ensure least privilege?"
-
-**Answer (Show security mindset):**
-
-"Every Lambda has a dedicated IAM execution role scoped to the minimal actions and resources it needs.
-
-**Example: PostConfirmation Lambda**
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "dynamodb:PutItem",
-      "Resource": "arn:aws:dynamodb:ap-south-1:ACCOUNT:table/advitigudagudi-user-service-profiles"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "events:PutEvents",
-      "Resource": "arn:aws:events:ap-south-1:ACCOUNT:event-bus/advitigudagudi-auth-PhotoShareBus"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "sqs:SendMessage",
-      "Resource": "arn:aws:sqs:ap-south-1:ACCOUNT:advitigudagudi-user-postconfirmation-dlq"
-    }
-  ]
-}
+```text
+React obtains Cognito token
+  -> sends Authorization: Bearer <jwt>
+  -> API Gateway Cognito authorizer validates token
+  -> Lambda receives trusted claims
 ```
 
-Not:
-- DynamoDB:*
-- events:* (which would allow deleting the bus)
-- s3:* (this Lambda doesn't touch S3)
+How to explain it:
 
-**Cross-stack pattern:**
-- Auth stack exports EventBus ARN
-- User stack imports it and uses it in the IAM policy
-- This ties IAM to actual deployed resources, not hardcoded ARNs
+"This is a common AWS serverless pattern. API Gateway validates the Cognito JWT before Lambda runs, so invalid or expired tokens are rejected early. Lambda gets claims like `sub` and `email` from the authorizer context."
 
-**Cognito-Specific:**
-- The PostConfirmation trigger is configured with a Lambda permission granting cognito-idp.amazonaws.com permission to invoke it
-- Without this permission, Cognito can't invoke the Lambda
+Strengths:
 
-**Prevention of key practices:**
-- No root account credentials in code
-- Google Client Secret stored in Secrets Manager with CloudFormation dynamic reference — never in SAM template or git
-- Secrets Manager policy allows only the Lambda that needs it"
+- Simple and native to API Gateway.
+- Lambda does not need to verify JWTs manually.
+- Easy to secure APIs quickly.
+- Good for prototypes, internal tools, and learning API Gateway authorizers.
 
----
+Trade-offs:
 
-### Q: "What happens if DynamoDB write fails in PostConfirmation?"
+- The browser must hold a token in memory or storage.
+- `localStorage` and `sessionStorage` increase XSS risk.
+- The frontend owns more of the token refresh/session lifecycle.
 
-**Answer (Shows production thinking):**
+### Pattern 2: Backend Token Exchange With HttpOnly Cookies
 
-"Let's trace through:
+Flow:
 
-1. PostConfirmation Lambda executes, tries to PutItem to DynamoDB
-2. DynamoDB returns ProvisionedThroughputExceededException or a network timeout
-3. Our Lambda catches the error in the try-catch
-4. We construct a failure payload with userId, email, triggerSource, error.message
-5. We send it to SQS DLQ with MessageAttributes (for filtering in CloudWatch)
-6. **Important: We still return the Cognito event unmodified**
-   - Cognito expects the event object back from PostConfirmation
-   - If we throw an error, Cognito triggers a lambda error, which **blocks the signup**
-   - Instead, we return success to Cognito (user is confirmed) but capture the failure to SQS
-
-**Later (operational recovery):**
-1. On-call engineer gets a CloudWatch alarm: 'DLQ message count > 0'
-2. Engineer checks what went wrong (DynamoDB was overloaded, network issue, etc.)
-3. Engineer fixes the root cause
-4. Engineer replays DLQ messages — a Lambda reads the SQS message, re-attempts the DynamoDB write
-5. If successful, we delete the message from DLQ
-
-**Why this pattern?**
-- User gets a working account immediately (signup is not blocked)
-- User Service profile gets created eventually (within 15 minutes)
-- Frontend can fetch /v1/users/me immediately, gets a 404 briefly, but profile will appear
-- We don't lose the event — 14-day retention on DLQ means we have time to investigate
-
-**Alternative patterns we considered (❌):**
-- Throw error from PostConfirmation: blocks signup (terrible UX)
-- Auto-retry in Lambda: adds latency to signup flow
-- Step Functions: adds complexity, harder to debug"
-
----
-
-### Q: "How do you handle the EventBridge USER_CREATED event if a subscriber crashes?"
-
-**Answer:**
-
-"EventBridge has built-in retry and DLQ:
-
-```yaml
-EventBridgeRule:
-  Type: AWS::Events::Rule
-  Properties:
-    Targets:
-      - Arn: !GetAtt SyncUserIndexFunction.Arn
-        RetryPolicy:
-          MaximumEventAge: 3600  # Retry for 1 hour
-          MaximumRetryAttempts: 2  # Total 3 invocations (1 initial + 2 retries)
-        DeadLetterConfig:
-          Arn: !GetAtt EventBridgeDLQ.Arn  # SQS queue
+```text
+React redirects to Cognito Hosted UI
+  -> Cognito redirects back with authorization code
+  -> React sends only the code to backend
+  -> Lambda exchanges code with Cognito
+  -> backend stores tokens in HttpOnly Secure SameSite cookies
+  -> React calls /auth/me with credentials included
 ```
 
-**Scenario: SyncUserIndexFunction crashes**
+How to explain it:
 
-1. EventBridge invokes SyncUserIndexFunction with USER_CREATED event
-2. Function crashes (returns non-zero exit code or throws)
-3. EventBridge waits ~1 second, retries
-4. Function crashes again
-5. EventBridge waits ~2 seconds, retries again (exponential backoff)
-6. Function crashes a third time
-7. EventBridge sends event to DLQ SQS queue
+"This is the preferred enterprise pattern for this app. React never reads JWTs. The backend owns token exchange, refresh, and logout. The frontend only asks `/auth/me` whether a session exists."
 
-**Operational response:**
-1. On-call engineer gets alert: 'EventBridge DLQ has messages'
-2. Engineer fixes Photo Service (e.g., restart Lambda, fix code bug)
-3. Engineer replays DLQ: a Lambda reads the DLQ message (USER_CREATED event), re-invokes SyncUserIndexFunction
-4. If successful, message is deleted from DLQ
+Strengths:
 
-**Why not infinite retries?**
-- Prevent storms. If a service is misconfigured, we don't want EventBridge hammering it forever
-- Forces human intervention, which is appropriate for operational issues
-- The 1-hour window is enough for most transient failures to recover
+- Tokens are inaccessible to JavaScript.
+- Lower impact from XSS because tokens cannot be read directly.
+- Frontend auth state stays simple: authenticated user profile only.
+- Better for public production apps.
 
-**Trade-off:**
-- User index in Photo Service might be stale briefly (missing new users)
-- But this is **acceptable** because we only need the index for email-to-userId lookup during photo sharing
-- A user can still log in and upload photos (doesn't require their own profile in the index)
-- Email lookups might fail, but the user can share with the direct userId instead"
+Trade-offs:
 
----
+- Backend must implement callback exchange, cookies, refresh, logout, and CSRF-aware behavior.
+- Cross-domain cookies need careful `SameSite`, `Secure`, CORS, and custom-domain setup.
+- API Gateway authorizer integration may require adapting cookie validation into the backend/session layer.
 
-## Part 4: Handling Tough Questions
+Best interview answer:
 
-### Q: "Why not just use Cognito User Pool as the single source of truth? Why replicate user data to DynamoDB?"
+"I can explain both. For learning API Gateway security, Bearer JWT authorizers are excellent. For this app's preferred production frontend architecture, I would use backend token exchange and HttpOnly cookies so React never stores tokens."
 
-**Answer (Shows architectural thinking):**
+## User Microservice Talking Points
 
-"Great question. We _do_ use Cognito as authoritative for identity. But we replicate the **minimal profile data** (userId, email, displayName, profilePictureUrl) to DynamoDB because:
+Flow:
 
-1. **Query patterns Cognito doesn't support:**
-   - Get all users (Cognito has no list-all-users API without ListUsers admin action, which is slow)
-   - Query by email in a GSI (Cognito only indexes by username/email for auth, not for profile lookups)
-   - Join user data with custom attributes in a transaction
-
-2. **Performance:**
-   - Cognito API is slower for profile lookups (goes through IDP infrastructure)
-   - DynamoDB with on-demand billing is faster and cheaper
-
-3. **Autonomy:**
-   - Each microservice has its own database (poly-persistence)
-   - Photo Service doesn't need to hit Cognito to look up a user's email
-   - Calendar Service maintains its own user index independently
-
-4. **Schema flexibility:**
-   - Cognito has limited custom attributes
-   - We might want to store photos:uploadCount, meetings:attendedCount, etc., in DynamoDB
-   - Cognito is not suitable for that
-
-**What we sync:**
-- userId, email, displayName, profilePictureUrl (identity-related)
-- Nothing sensitive (no passwords, no tokens)
-
-**What stays in Cognito:**
-- Password hash, MFA setup, token generation, session management
-- Only Cognito User Pool is authoritative for these"
-
----
-
-### Q: "How do you handle multi-tenancy if you want to sell this as a B2B product?"
-
-**Answer (Shows forward thinking):**
-
-"Current architecture is single-tenant (one customer: Advitigudagudi). Here's how we'd scale to multi-tenant:
-
-**Option 1: Namespace isolation (Low cost, medium complexity)**
-- Create a Cognito User Pool per tenant
-- Create EventBus per tenant: photoshare-tenant-{tenantId}-bus
-- Create tables per tenant: photos-tenant-{tenantId}, meetings-tenant-{tenantId}
-- Tenants are completely isolated at the AWS resource level
-
-**Option 2: Row-level security (Lower cost, higher complexity)**
-- Single Cognito User Pool for all tenants (shared auth)
-- Single tables with tenantId as part of the partition key: userId#tenantId
-- Application logic enforces: 'User can only read rows where tenantId matches their tenant'
-
-**Option 3: Subdomain routing (Medium cost, medium complexity)**
-- Single codebase, but route based on subdomain
-- tenant-a.advitigudagudi.com → uses PhotoBus-A, tables prefixed with A_
-- tenant-b.advitigudagudi.com → uses PhotoBus-B, tables prefixed with B_
-- Hybrid approach: some shared infrastructure (Cognito), some isolated (EventBuses)
-
-**We'd go with Option 1 or Option 3:**
-- Option 1 if tenants need complete isolation (healthcare, finance)
-- Option 3 if we want to share some infrastructure but keep costs reasonable
-- Option 2 only if we're willing to risk a bug that exposes one tenant's data to another
-
-**SAM deployment:**
-```bash
-# Deploy for tenant A
-sam deploy --parameter-overrides TenantId=tenant-a
-
-# Deploy for tenant B
-sam deploy --parameter-overrides TenantId=tenant-b
+```text
+Cognito PostConfirmation
+  -> Lambda validates triggerSource
+  -> DynamoDB stores profile
+  -> EventBridge publishes USER_CREATED
+  -> SQS captures failures
 ```
 
-**Cost consideration:**
-- Cognito: ~$0.50 per 1000 user sign-ups + $0.015 per daily active user
-- DynamoDB on-demand: costs scale with actual usage, not per-tenant
-- EventBridge: $1 per million events (negligible)
-- So multi-tenancy is mostly additive cost of replication, not exponential"
+Key points:
 
----
+- Cognito remains the identity authority.
+- DynamoDB stores a minimal user profile for app query patterns.
+- `USER_CREATED` lets downstream services react without direct service calls.
+- The Lambda should allow only `PostConfirmation_ConfirmSignUp` and `PostConfirmation_ConfirmFederatedIdentity`.
+- If DynamoDB or EventBridge fails, capture the failure to SQS and return the event to Cognito so signup is not blocked.
 
-## Part 5: "Walk Me Through" Scenarios
+Strong answer:
 
-### Scenario 1: A user signs up with Google OAuth. Trace the entire flow.
+"I do not want profile creation failure to block account confirmation. The user should complete signup, while the failed profile write or event publish is captured to SQS for replay."
 
-1. User clicks 'Sign in with Google' on advitigudagudi.com
-2. React app redirects to Cognito Hosted UI: `https://advitigudagudi-auth-{ACCOUNT_ID}.auth.ap-south-1.amazoncognito.com/login?client_id={CLIENT_ID}&response_type=code&scope=openid+email+profile&redirect_uri=https://advitigudagudi.com/callback`
-3. Cognito Hosted UI renders Google button (configured as SupportedIdentityProvider)
-4. User clicks Google button → redirects to Google OAuth consent screen
-5. User consents, Google returns authorization code to Cognito
-6. Cognito: auto-confirms account (no email verification) with triggerSource=PostConfirmation_ConfirmFederatedIdentity
-7. Cognito invokes PostConfirmation Lambda
-8. PostConfirmation Lambda:
-   - Validates triggerSource is PostConfirmation_ConfirmFederatedIdentity (allowlist)
-   - Extracts sub, email, name, given_name, family_name from userAttributes
-   - Applies name fallback: name || given_name+family_name || email.split('@')[0]
-   - PutItem to DynamoDB: {userId: sub, email, displayName, createdAt, source: 'google'}
-   - PutEvents to EventBridge: {source: 'photoshare.users', DetailType: 'USER_CREATED', Detail: {userId, email, displayName, source: 'google'}}
-   - Returns event object unmodified to Cognito
-9. Cognito redirects back to: `https://advitigudagudi.com/callback?code={AUTHORIZATION_CODE}&state={STATE}`
-10. React app exchanges code for tokens: POST to Cognito token endpoint (handled by Amplify Auth SDK)
-11. Cognito returns: {access_token, id_token, refresh_token}
-12. React app stores tokens in memory (not localStorage — vulnerable to XSS)
-13. React app: GET /v1/users/me with Bearer {id_token}
-14. API Gateway authorizer validates JWT signature against Cognito User Pool public key
-15. GetUser Lambda executes: GetItem from DynamoDB with userId from JWT claims
-16. DynamoDB returns: {userId, email, displayName, profilePictureUrl, createdAt}
-17. React app renders: "Welcome, {displayName}! Upload a photo or create a meeting"
+## EventBridge And Service Decoupling
 
-**Latency breakdown:**
-- Google OAuth redirect: ~500ms
-- Cognito PostConfirmation: ~200ms
-- /v1/users/me: ~150ms
-- Total: ~1 second (acceptable for first login)
+How to explain:
 
----
+"Services do not call each other directly for lifecycle events. They publish domain events. New services can subscribe without changing the producer."
 
-### Scenario 2: User shares a photo with another user by email.
+Example:
 
-1. User A clicks "Share" on a photo → enters User B's email
-2. Frontend: POST /v1/photos/{photoId}/share with body: {emails: ["user-b@example.com"]}
-3. API Gateway authorizer validates JWT, extracts userId=user-a
-4. SharePhoto Lambda executes:
-   - Validates photoId exists and userId is owner (GetItem from PhotoMetadataTable)
-   - Looks up user-b@example.com in user-index table (QueryCommand on emailIndex)
-   - Gets back: {userId: user-b-uuid, email: user-b@example.com, ...}
-   - Updates PhotoMetadataTable: sharedWith = [previous_user_ids..., user-b-uuid]
-   - PutEvents to EventBridge: {DetailType: 'PHOTO_SHARED', Detail: {photoId, uploaderUserId, sharedWith: [...], timestamp}}
-   - Returns {sharedWith: [...]}
-5. Photo Service (self): no subscriber yet, but Calendar Service might subscribe to PHOTO_SHARED in future
-6. Photo metadata now includes sharedWith: [user-b-uuid]
-7. Frontend polls /v1/photos or uses WebSocket subscription to see {sharedWith: [user-b-uuid]}
-8. User B logs in, GET /v1/photos returns a list that includes this photo (because sharedWith includes their userId)
+```text
+User Service publishes USER_CREATED
+  -> Photo Service syncs local user index
+  -> Calendar Service syncs local user index
+```
 
-**If user-b@example.com doesn't exist:**
-- QueryCommand returns empty Items
-- Lambda logs a warning: 'sharePhoto.emailNotFound'
-- Lambda continues (doesn't fail) and returns without adding that email
-- User A sees: "Could not find user with email user-b@example.com. Photo shared with 0 users."
-- User A can retry by searching for the user's ID instead
+Benefits:
 
----
+- Independent deployment.
+- Better resilience when a downstream service is unavailable.
+- Easier expansion to new services.
+- Clear event contracts with schema versions.
 
-## Part 6: Questions to Ask Your Interviewer (Shows Preparation)
+Important distinction:
 
-1. **"How do you approach observability and alerting in your organizations? Are you using CloudWatch, Datadog, New Relic?"**
-   - Shows you care about ops, not just architecture
+"EventBridge is an event bus, not a FIFO queue. It is best for routing events to subscribers, while SQS is better for buffering, retry, and replay workflows."
 
-2. **"What's your experience with multi-region deployments? How do you handle failover?"**
-   - Demonstrates thinking about high availability
+## Photo Service Talking Points
 
-3. **"How do you handle secrets rotation? Is it automated?"**
-   - Shows security mindset
+Target upload flow:
 
-4. **"What's the biggest architectural decision you've had to reverse? What did you learn?"**
-   - Conversational, shows they have real experience
+```text
+Frontend requests presigned URL
+  -> Lambda validates metadata
+  -> Lambda creates S3 PUT URL
+  -> Lambda writes pending metadata to DynamoDB
+  -> Browser uploads directly to S3
+```
 
-5. **"How do you ensure backward compatibility when APIs change?"**
-   - Shows versioning thought (we use /v1/ paths)
+Why this matters:
 
----
+- Lambda does not stream file bytes.
+- S3 handles high-concurrency uploads.
+- Presigned URLs are time-limited.
+- Metadata can be tracked before upload completes.
 
-## Part 7: Final Talking Points for Confidence
+Strong answer:
 
-✅ **"We use EventBridge as our async backbone, allowing services to operate independently without coupling."**
+"Presigned URLs keep Lambda stateless and fast. Lambda generates the upload permission, then the browser uploads directly to S3. That avoids tying up Lambda memory and duration for large files."
 
-✅ **"Presigned URLs offload file uploads to S3, keeping Lambda stateless and scalable."**
+## Calendar And Meeting Talking Points
 
-✅ **"JWT validation at the API Gateway authorizer layer means every Lambda gets pre-authenticated requests."**
+Current learning path:
 
-✅ **"DLQ capture on both PostConfirmation failures and EventBridge delivery failures ensures no data loss."**
+- Store meeting metadata in DynamoDB.
+- Resolve invited users by userId or email.
+- Publish `MEETING_SCHEDULED` through EventBridge.
+- Use a free meeting tool such as Google Meet or another no-cost provider for testing and learning.
 
-✅ **"Cognito Hosted UI handles both native and federated auth flows, so we don't build custom auth UI."**
+How to explain Chime:
 
-✅ **"Each microservice is independently deployable via SAM. Auth can deploy independently of Photo or Calendar."**
+"Chime SDK is a production-grade option if we later want AWS-native meeting infrastructure. For learning and cost control, I would first integrate a free meeting-link workflow, then compare what Chime gives us: attendee tokens, media control, and AWS-native observability."
 
-✅ **"Structured logging with CloudWatch Logs Insights + X-Ray tracing gives us full observability."**
+Practical answer:
 
-✅ **"Least-privilege IAM means each Lambda has only the permissions it needs — nothing more."**
+"For the current project phase, I would not spend money on meeting infrastructure just to prove the calendar workflow. I would store meeting metadata and attach a free meeting link. Later, Chime can replace that link-generation layer if production requirements demand it."
 
----
+## Failure Handling And Observability
 
-## Part 8: If You Get Stuck
+Patterns to mention:
 
-**Interviewer:** "You said you use presigned URLs. Can you explain why that's better than having the Lambda stream the file?"
+- SQS DLQ or failure queue for Lambda processing failures.
+- Structured JSON logs with `action`, `requestId`, `userId`, and `durationMs`.
+- CloudWatch alarms for Lambda errors and DLQ message count.
+- Least-privilege IAM per Lambda.
+- DynamoDB point-in-time recovery for important tables.
 
-**You:** "Great question. If Lambda streams the file:
-- Lambda is blocked during upload (can't handle other requests)
-- Each concurrent upload ties up 512MB of Lambda memory for potentially minutes
-- At 10 users uploading simultaneously, we'd need to scale Lambda horizontally
-- Every upload goes through Lambda, so Lambda becomes the bottleneck
+Strong answer:
 
-With presigned URLs:
-- Lambda generates the URL in <100ms and returns
-- Browser connects directly to S3 with the URL
-- S3 is built for this — millions of concurrent uploads
-- Lambda can serve other requests immediately
-- We scale to unlimited concurrent uploads for free
+"Failures should be captured, not hidden. A signup, upload, or meeting workflow can fail downstream, but the system should produce structured logs and queue messages so we can diagnose and replay safely."
 
-The trade-off: browser needs to handle CORS, pre-flight requests, etc. But that's solved by having S3 configured with correct CORS headers."
+## Scaling Talking Points
 
----
+Lambda:
 
-## Part 9: Red Flags to Avoid
+- Scales by concurrency.
+- Reserved concurrency can protect critical functions.
+- Keep functions stateless.
 
-❌ **Don't say:** "We use DynamoDB for everything because it's serverless."
-✅ **Instead:** "We use DynamoDB because it scales automatically, but we maintain Cognito as the authoritative identity provider for security-sensitive data."
+DynamoDB:
 
-❌ **Don't say:** "EventBridge is our message queue."
-✅ **Instead:** "EventBridge is our event bus. It's optimized for routing events to multiple subscribers, not for FIFO queues or tight ordering."
+- On-demand mode supports unpredictable learning/project traffic.
+- Design keys around access patterns.
+- Avoid hot partitions for high-volume entities.
 
-❌ **Don't say:** "We don't need monitoring because Lambda logs to CloudWatch automatically."
-✅ **Instead:** "We emit structured JSON logs with requestId, action, durationMs so we can query them in CloudWatch Logs Insights and identify patterns."
+S3:
 
-❌ **Don't say:** "Our microservices are loosely coupled."
-✅ **Instead:** "Our microservices are decoupled through EventBridge. Photo Service doesn't know about User Service, but it subscribes to USER_CREATED events."
+- Browser-direct upload scales far better than proxying files through Lambda.
+- Use versioning, encryption, lifecycle rules, and CloudFront where appropriate.
 
----
+EventBridge:
 
-Good luck! You've got this. 🚀
+- Lets services add subscribers without changing producers.
+- Combine with SQS for retry/replay where needed.
+
+## Security Talking Points
+
+Authentication:
+
+- Cognito is the identity provider.
+- Hosted UI avoids custom password handling.
+- Google federation and native login flow into the same user pool.
+
+Token handling:
+
+- Never store tokens in Redux.
+- Avoid `localStorage` and `sessionStorage` for production token storage.
+- Prefer HttpOnly cookies for this app's implementation target.
+
+IAM:
+
+- Each Lambda should have only the actions and resources it needs.
+- Avoid broad permissions such as `dynamodb:*`, `events:*`, or `s3:*`.
+
+Secrets:
+
+- Do not commit OAuth secrets, AWS credentials, private keys, or token files.
+- Use Secrets Manager or manually provided configuration values.
+
+## Common Interview Questions
+
+### Why replicate user profile data to DynamoDB if Cognito has users?
+
+Cognito is authoritative for identity and credentials, but DynamoDB is better for app profile query patterns, service autonomy, and local indexes. We store only minimal profile data such as `userId`, `email`, and display name. Passwords and token generation stay in Cognito.
+
+### What happens if DynamoDB fails during PostConfirmation?
+
+The Lambda catches the failure, sends a structured message to SQS, and returns the Cognito event so signup is not blocked. Operations can replay the queue message after the root cause is fixed.
+
+### Why EventBridge instead of direct Lambda calls?
+
+Direct calls couple services at runtime. EventBridge lets User Service publish `USER_CREATED` without knowing which services subscribe. Photo, Calendar, or future services can react independently.
+
+### Why not use Amplify?
+
+Amplify is useful for fast prototypes and can be discussed conceptually, but this project intentionally demonstrates direct Cognito, SAM, Lambda, RTK Query, and Module Federation architecture. Introducing Amplify would hide some of the architecture this project is meant to teach.
+
+### What is the optimal auth solution?
+
+It depends. Bearer JWT with API Gateway authorizers is simple and AWS-native. HttpOnly cookie sessions are better when browser token confidentiality matters. For Advitigudagudi's current production-style frontend, the preferred solution is backend token exchange with HttpOnly cookies.
+
+## Final Talking Points
+
+- "I can explain both Bearer JWT authorizers and HttpOnly cookie sessions, including when each is appropriate."
+- "Cognito is the identity authority; DynamoDB stores app-specific profile data."
+- "EventBridge decouples services through domain events like `USER_CREATED`."
+- "SQS failure capture lets us recover without losing operational context."
+- "Presigned URLs make uploads scalable because the browser sends files directly to S3."
+- "The current calendar path uses free meeting links for learning, with Chime as a future production option."
+- "The current deployment target is Vite microfrontends on S3/CloudFront plus SAM-based serverless services."

@@ -13,6 +13,10 @@ export interface CurrentUserResponse {
   };
 }
 
+export interface AuthCallbackRequest {
+  code: string;
+}
+
 export const authApi = createApi({
   reducerPath: "authApi",
 
@@ -29,7 +33,35 @@ export const authApi = createApi({
 
       providesTags: ["CurrentUser"],
     }),
+
+    authCallback: builder.mutation<{ success: boolean }, AuthCallbackRequest>({
+      query: (body) => ({
+        url: "/auth/callback",
+
+        method: "POST",
+
+        body,
+      }),
+
+      invalidatesTags: ["CurrentUser"],
+    }),
+
+    logout: builder.mutation<{ success: boolean }, void>({
+      query: () => ({
+        url: "/auth/logout",
+
+        method: "POST",
+      }),
+
+      invalidatesTags: ["CurrentUser"],
+    }),
   }),
 });
 
-export const { useGetCurrentUserQuery } = authApi;
+export const {
+  useGetCurrentUserQuery,
+
+  useAuthCallbackMutation,
+
+  useLogoutMutation,
+} = authApi;

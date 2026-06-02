@@ -1,11 +1,7 @@
-import AuthBootstrap from "./features/auth/AuthBootstrap";
+import AppRoutes from "./routes";
 
 function App() {
-  return (
-    <div>
-      <AuthBootstrap />
-    </div>
-  );
+  return <AppRoutes />;
 }
 
 export default App;

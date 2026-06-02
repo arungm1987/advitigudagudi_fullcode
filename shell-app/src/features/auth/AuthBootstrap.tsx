@@ -1,27 +1,21 @@
 import { useGetCurrentUserQuery } from "../../services/authApi";
 
 const AuthBootstrap = () => {
-  const token = localStorage.getItem("accessToken");
-
-  const { data, isLoading, error } = useGetCurrentUserQuery(undefined, {
-    skip: !token,
-  });
-
-  if (!token) {
-    return <div>No session found</div>;
-  }
+  const { data, isLoading, error } = useGetCurrentUserQuery();
 
   if (isLoading) {
-    return <div>Loading session...</div>;
+    return <div>Checking session...</div>;
   }
 
   if (error) {
-    return <div>Session expired</div>;
+    return <div>No active session</div>;
   }
 
   return (
     <div>
-      <h2>Enterprise Auth Bootstrap Complete</h2>
+      <h1>Welcome 🎉</h1>
+
+      <h3>Secure HttpOnly Cookie Authentication Active</h3>
 
       <pre>{JSON.stringify(data, null, 2)}</pre>
     </div>

@@ -83,6 +83,9 @@ jobs:
             --capabilities CAPABILITY_IAM \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset
+            --parameter-overrides \
+              GoogleClientId=${{ secrets.GOOGLE_CLIENT_ID }} \
+              GoogleClientSecret=${{ secrets.GOOGLE_CLIENT_SECRET }}
 
   #########################################################
   # Production Deployment

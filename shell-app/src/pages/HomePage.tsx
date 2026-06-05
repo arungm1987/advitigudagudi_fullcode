@@ -1,90 +1,49 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense } from "react";
 
-import {
-  login,
-  logout,
-  getAccessToken,
-  getIdToken,
-  getUserFromToken,
-} from '../services/authService'
+import { useSelector, useDispatch } from "react-redux";
 
-const AuthApp = lazy(() => import('auth_mfe/AuthApp'))
+import type { RootState, AppDispatch } from "../store/store";
+
+import { clearCredentials, clearUserProfile } from "../redux";
+
+import { login, logout } from "../services/authService";
+
+const AuthApp = lazy(() => import("auth_mfe/AuthApp"));
 
 const HomePage = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const dispatch = useDispatch<AppDispatch>();
 
-  const [accessToken, setAccessToken] = useState<string | null>(null)
+  const {
+    isAuthenticated,
 
-  const [user, setUser] = useState<any>(null)
+    accessToken,
 
-  useEffect(() => {
-    const initializeAuth = async () => {
-      const token = getAccessToken()
-      const idToken = getIdToken()
+    user,
+  } = useSelector((state: RootState) => state.auth);
 
-      if (token && idToken) {
-        localStorage.setItem('accessToken', token)
+  const handleLogout = () => {
+    dispatch(clearCredentials());
 
-        localStorage.setItem('idToken', idToken)
+    dispatch(clearUserProfile());
 
-        requestAnimationFrame(() => {
-          setAccessToken(token)
-
-          setIsAuthenticated(true)
-
-          const decodedUser = getUserFromToken()
-
-          setUser(decodedUser)
-        })
-
-        window.history.replaceState(
-          {},
-          document.title,
-          window.location.pathname,
-        )
-      } else {
-        const existingToken =
-          localStorage.getItem('accessToken')
-
-        if (existingToken) {
-          requestAnimationFrame(() => {
-            setAccessToken(existingToken)
-
-            setIsAuthenticated(true)
-
-            const decodedUser = getUserFromToken()
-
-            setUser(decodedUser)
-          })
-        }
-      }
-    }
-
-    initializeAuth()
-  }, [])
+    logout();
+  };
 
   return (
     <div className="min-h-screen p-10">
       <div className="mb-8 rounded-xl border p-6">
-        <h1 className="text-3xl font-bold">
-          Shell Application
-        </h1>
+        <h1 className="text-3xl font-bold">Shell Application</h1>
 
-        <p className="mt-2">
-          Host MFE running on port 3000
-        </p>
+        <p className="mt-2">Host MFE running on port 3000</p>
 
         <div className="mt-6 flex gap-4">
           {!isAuthenticated ? (
-            <button
-              onClick={login}
-              className="rounded-lg border px-4 py-2"
-            >
+            <button onClick={login} className="rounded-lg border px-4 py-2">
               Login with Cognito
             </button>
           ) : (
             <button
-              onClick={logout}
+              onClick={handleLogout}
               className="rounded-lg border px-4 py-2"
             >
               Logout
@@ -94,9 +53,7 @@ const HomePage = () => {
 
         {user && (
           <div className="mt-6 rounded-lg border p-4">
-            <h3 className="mb-3 text-lg font-semibold">
-              Logged In User
-            </h3>
+            <h3 className="mb-3 text-lg font-semibold">Logged In User</h3>
 
             <p>
               <strong>Name:</strong> {user.name}
@@ -115,12 +72,10 @@ const HomePage = () => {
         {isAuthenticated && (
           <div className="mt-6 break-all">
             <h3 className="mb-2 text-lg font-semibold">
-              Access Token
+              Access Token (Memory Only)
             </h3>
 
-            <p className="text-sm">
-              {accessToken}
-            </p>
+            <p className="text-sm">{accessToken}</p>
           </div>
         )}
       </div>
@@ -129,7 +84,7 @@ const HomePage = () => {
         <AuthApp />
       </Suspense>
     </div>
-  )
-}
+  );
+};
 
-export default HomePage
+export default HomePage;

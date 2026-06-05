@@ -1,33 +1,58 @@
 import { useEffect } from "react";
+
+import { useDispatch } from "react-redux";
+
 import { useNavigate } from "react-router-dom";
 
-import { useAuthCallbackMutation } from "../../services/authApi";
+import { jwtDecode } from "jwt-decode";
+
+import type { AppDispatch } from "../../store/store";
+
+import { setCredentials, setUserProfile } from "../../redux";
 
 const AuthCallback = () => {
+  const dispatch = useDispatch<AppDispatch>();
+
   const navigate = useNavigate();
 
-  const [exchangeCode] = useAuthCallbackMutation();
-
   useEffect(() => {
-    const processLogin = async () => {
-      const params = new URLSearchParams(window.location.search);
+    const hash = window.location.hash;
 
-      const code = params.get("code");
+    if (!hash) {
+      navigate("/");
 
-      if (!code) {
-        navigate("/");
-        return;
-      }
+      return;
+    }
 
-      await exchangeCode({
-        code,
-      }).unwrap();
+    const params = new URLSearchParams(hash.substring(1));
 
-      navigate("/dashboard");
-    };
+    const accessToken = params.get("access_token");
 
-    processLogin();
-  }, [exchangeCode, navigate]);
+    const idToken = params.get("id_token");
+
+    if (accessToken && idToken) {
+      const user = jwtDecode<any>(idToken);
+
+      dispatch(
+        setCredentials({
+          accessToken,
+          idToken,
+        }),
+      );
+
+      dispatch(
+        setUserProfile({
+          sub: user.sub,
+          name: user.name,
+          email: user.email,
+        }),
+      );
+
+      window.history.replaceState({}, document.title, "/");
+
+      navigate("/");
+    }
+  }, [dispatch, navigate]);
 
   return <div>Completing login...</div>;
 };

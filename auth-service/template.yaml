@@ -7,16 +7,16 @@ Description: Advitigudagudi Authentication Service
 Globals:
   Function:
     Runtime: nodejs20.x
-
     Timeout: 30
-
     MemorySize: 256
 
 Parameters:
   GoogleClientId:
     Type: String
 
-    Default: 769749190788-9kepmg0ge3ibavp9it6quqjdos52df1u.apps.googleusercontent.com
+  GoogleClientSecret:
+    Type: String
+    NoEcho: true
 
 Resources:
   #########################################################
@@ -59,7 +59,7 @@ Resources:
       ProviderDetails:
         client_id: !Ref GoogleClientId
 
-        client_secret: !Sub "{{resolve:secretsmanager:advitigudagudi/google-client-secret:SecretString}}"
+        client_secret: !Ref GoogleClientSecret
 
         authorize_scopes: "openid email profile"
 
@@ -85,21 +85,32 @@ Resources:
       AllowedOAuthFlows:
         - code
 
+        - implicit
+
       AllowedOAuthScopes:
         - email
+
         - openid
+
         - profile
 
       SupportedIdentityProviders:
         - Google
+
         - COGNITO
 
       CallbackURLs:
         - http://localhost:3000/auth/callback
+
+        - https://dev.advitigudagudi.com/auth/callback
+
         - https://d18mnuhklzfs5r.cloudfront.net/auth/callback
 
       LogoutURLs:
         - http://localhost:3000
+
+        - https://dev.advitigudagudi.com
+
         - https://d18mnuhklzfs5r.cloudfront.net
 
   #########################################################

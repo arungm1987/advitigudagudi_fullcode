@@ -70,6 +70,10 @@ jobs:
 
       - name: Build SAM Application
         run: sam build
+      - name: Verify Google Secrets
+        run: |
+          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}"
+          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}"
 
       #########################################################
       # SAM Deploy
@@ -82,7 +86,7 @@ jobs:
             --resolve-s3 \
             --capabilities CAPABILITY_IAM \
             --no-confirm-changeset \
-            --no-fail-on-empty-changeset
+            --no-fail-on-empty-changeset \
             --parameter-overrides \
               GoogleClientId=${{ secrets.GOOGLE_CLIENT_ID }} \
               GoogleClientSecret=${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -162,4 +166,7 @@ jobs:
             --resolve-s3 \
             --capabilities CAPABILITY_IAM \
             --no-confirm-changeset \
-            --no-fail-on-empty-changeset
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              GoogleClientId=${{ secrets.GOOGLE_CLIENT_ID }} \
+              GoogleClientSecret=${{ secrets.GOOGLE_CLIENT_SECRET }}

@@ -10,6 +10,14 @@ import type { AppDispatch } from "../../store/store";
 
 import { setCredentials, setUserProfile } from "../../redux";
 
+interface CognitoUser {
+  sub: string;
+
+  email?: string;
+
+  name?: string;
+}
+
 const AuthCallback = () => {
   const dispatch = useDispatch<AppDispatch>();
 
@@ -31,24 +39,37 @@ const AuthCallback = () => {
     const idToken = params.get("id_token");
 
     if (accessToken && idToken) {
-      const user = jwtDecode<any>(idToken);
+      const user = jwtDecode<CognitoUser>(idToken);
 
       dispatch(
         setCredentials({
           accessToken,
+
           idToken,
+
+          user,
         }),
       );
 
       dispatch(
         setUserProfile({
-          sub: user.sub,
+          userId: user.sub,
+
           name: user.name,
+
           email: user.email,
+
+          roles: ["USER"],
         }),
       );
 
-      window.history.replaceState({}, document.title, "/");
+      window.history.replaceState(
+        {},
+
+        document.title,
+
+        "/",
+      );
 
       navigate("/");
     }

@@ -4,6 +4,9 @@ const redirectUri = import.meta.env.VITE_REDIRECT_URI;
 const responseType = import.meta.env.VITE_COGNITO_RESPONSE_TYPE;
 const scope = import.meta.env.VITE_COGNITO_SCOPE;
 
+const getEncodedScope = () =>
+  encodeURIComponent(decodeURIComponent(scope.replace(/\+/g, " ")));
+
 const LoginPage = () => {
   const login = () => {
     console.log("=========== COGNITO DEBUG ===========");
@@ -20,7 +23,7 @@ const LoginPage = () => {
       `${domain}/login?` +
       `client_id=${clientId}&` +
       `response_type=${responseType}&` +
-      `scope=${scope}&` +
+      `scope=${getEncodedScope()}&` +
       `redirect_uri=${encodeURIComponent(redirectUri)}`;
 
     console.log("LOGIN URL:", loginUrl);

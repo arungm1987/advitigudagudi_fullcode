@@ -12,6 +12,9 @@ const responseType = import.meta.env.VITE_COGNITO_RESPONSE_TYPE;
 
 const scope = import.meta.env.VITE_COGNITO_SCOPE;
 
+const getEncodedScope = () =>
+  encodeURIComponent(decodeURIComponent(scope.replace(/\+/g, " ")));
+
 /**
  * Redirect to AWS Cognito Hosted UI
  */
@@ -30,7 +33,7 @@ export const login = () => {
     `${domain}/login?` +
     `client_id=${clientId}&` +
     `response_type=${responseType}&` +
-    `scope=${encodeURIComponent(scope)}&` +
+    `scope=${getEncodedScope()}&` +
     `redirect_uri=${encodeURIComponent(redirectUri)}`;
 
   window.location.href = loginUrl;

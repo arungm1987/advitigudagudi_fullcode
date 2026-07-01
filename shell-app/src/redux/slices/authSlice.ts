@@ -19,14 +19,17 @@ interface AuthState {
   isAuthenticated: boolean;
 }
 
-const initialState: AuthState = {
-  accessToken: null,
+const accessToken = localStorage.getItem("accessToken");
+const idToken = localStorage.getItem("idToken");
 
-  idToken: null,
+const initialState: AuthState = {
+  accessToken,
+
+  idToken,
 
   user: null,
 
-  isAuthenticated: false,
+  isAuthenticated: Boolean(accessToken && idToken),
 };
 
 const authSlice = createSlice({
@@ -62,6 +65,9 @@ const authSlice = createSlice({
       state.user = null;
 
       state.isAuthenticated = false;
+
+      localStorage.removeItem("accessToken");
+      localStorage.removeItem("idToken");
     },
   },
 });

@@ -3,15 +3,21 @@ import { Routes, Route } from "react-router-dom";
 import LoginPage from "../features/auth/LoginPage";
 import AuthCallback from "../features/auth/AuthCallback";
 import AuthBootstrap from "../features/auth/AuthBootstrap";
+import HomePage from "../pages/HomePage";
 
 const AppRoutes = () => {
   return (
     <Routes>
 
-      {/* Public login page */}
+      {/* Main shell page */}
       <Route 
         path="/" 
-        element={<LoginPage />} 
+        element={<HomePage />} 
+      />
+
+      <Route
+        path="/login"
+        element={<LoginPage />}
       />
 
       {/* Cognito redirects here */}

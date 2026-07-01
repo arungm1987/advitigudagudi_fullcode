@@ -16,7 +16,16 @@ interface CognitoUser {
   email?: string;
 
   name?: string;
+
+  given_name?: string;
+
+  family_name?: string;
 }
+
+const getDisplayName = (user: CognitoUser) =>
+  user.name ||
+  [user.given_name, user.family_name].filter(Boolean).join(" ") ||
+  user.email;
 
 const AuthCallback = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -41,6 +50,9 @@ const AuthCallback = () => {
     if (accessToken && idToken) {
       const user = jwtDecode<CognitoUser>(idToken);
 
+      localStorage.setItem("accessToken", accessToken);
+      localStorage.setItem("idToken", idToken);
+
       dispatch(
         setCredentials({
           accessToken,
@@ -55,7 +67,7 @@ const AuthCallback = () => {
         setUserProfile({
           userId: user.sub,
 
-          name: user.name,
+          name: getDisplayName(user),
 
           email: user.email,
 

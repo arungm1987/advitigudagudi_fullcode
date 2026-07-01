@@ -57,6 +57,7 @@ jobs:
           VITE_LOGOUT_URI: ${{ secrets.VITE_LOGOUT_URI }}
           VITE_COGNITO_RESPONSE_TYPE: ${{ secrets.VITE_COGNITO_RESPONSE_TYPE }}
           VITE_COGNITO_SCOPE: ${{ secrets.VITE_COGNITO_SCOPE }}
+          VITE_AUTH_MFE_REMOTE_URL: ${{ secrets.VITE_AUTH_MFE_REMOTE_URL }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
 
         run: |
@@ -67,6 +68,7 @@ jobs:
           echo "LOGOUT=$VITE_LOGOUT_URI"
           echo "RESPONSE_TYPE=$VITE_COGNITO_RESPONSE_TYPE"
           echo "SCOPE=$VITE_COGNITO_SCOPE"
+          echo "AUTH_MFE_REMOTE_URL=$VITE_AUTH_MFE_REMOTE_URL"
           echo "API=$VITE_API_BASE_URL"
 
       #########################################################
@@ -82,6 +84,7 @@ jobs:
           VITE_LOGOUT_URI: ${{ secrets.VITE_LOGOUT_URI }}
           VITE_COGNITO_RESPONSE_TYPE: ${{ secrets.VITE_COGNITO_RESPONSE_TYPE }}
           VITE_COGNITO_SCOPE: ${{ secrets.VITE_COGNITO_SCOPE }}
+          VITE_AUTH_MFE_REMOTE_URL: ${{ secrets.VITE_AUTH_MFE_REMOTE_URL }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
 
         run: npm run build
@@ -162,6 +165,7 @@ jobs:
           VITE_LOGOUT_URI: ${{ secrets.VITE_LOGOUT_URI }}
           VITE_COGNITO_RESPONSE_TYPE: ${{ secrets.VITE_COGNITO_RESPONSE_TYPE }}
           VITE_COGNITO_SCOPE: ${{ secrets.VITE_COGNITO_SCOPE }}
+          VITE_AUTH_MFE_REMOTE_URL: ${{ secrets.VITE_AUTH_MFE_REMOTE_URL }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
 
         run: npm run build

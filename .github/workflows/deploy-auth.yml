@@ -69,11 +69,10 @@ jobs:
       #########################################################
 
       - name: Build SAM Application
-        run: sam build
-      - name: Verify Google Secrets
         run: |
-          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}"
-          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}"
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          esbuild --version
+          sam build
 
       #########################################################
       # SAM Deploy
@@ -153,7 +152,10 @@ jobs:
       #########################################################
 
       - name: Build SAM Application
-        run: sam build
+        run: |
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          esbuild --version
+          sam build
 
       #########################################################
       # SAM Deploy

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { useEffect } from "react";
 
 import { useSelector, useDispatch } from "react-redux";
 import { jwtDecode } from "jwt-decode";
@@ -13,9 +13,6 @@ import {
 } from "../redux";
 
 import { login, logout } from "../services/authService";
-import RemoteErrorBoundary from "../components/RemoteErrorBoundary";
-
-const AuthApp = lazy(() => import("auth_mfe/AuthApp"));
 
 interface CognitoUser {
   sub: string;
@@ -33,7 +30,7 @@ const getDisplayName = (user: CognitoUser) =>
 const HomePage = () => {
   const dispatch = useDispatch<AppDispatch>();
 
-  const { isAuthenticated, accessToken } = useSelector(
+  const { isAuthenticated } = useSelector(
     (state: RootState) => state.auth,
   );
 
@@ -85,78 +82,105 @@ const HomePage = () => {
     logout();
   };
 
-  console.log("HOME REDUX STATE", {
-    isAuthenticated,
-    accessToken,
-    user,
-  });
-
   return (
-    <div className="min-h-screen p-10">
-      <div className="mb-8 rounded-xl border p-6">
-        <h1 className="text-3xl font-bold">Advitigudagudi</h1>
+    <div className="home-page">
+      <header className="site-header">
+        <a className="brand" href="/">
+          <span className="brand-mark">A</span>
+          <span>Advitigudagudi</span>
+        </a>
 
-        <p className="mt-2">
-          {isAuthenticated
-            ? `Hello, ${displayName}`
-            : "Enterprise Interview Preparation Platform"}
-        </p>
+        <nav className="main-nav" aria-label="Main navigation">
+          <a href="#practice">Practice</a>
+          <a href="#calendar">Calendar</a>
+          <a href="#progress">Progress</a>
+          <a href="#resources">Resources</a>
+        </nav>
 
-        <div className="mt-6 flex gap-4">
-          {!isAuthenticated ? (
-            <button onClick={login} className="rounded-lg border px-4 py-2">
-              Login with Cognito / Google
-            </button>
-          ) : (
-            <button
-              onClick={handleLogout}
-              className="rounded-lg border px-4 py-2"
-            >
-              Logout
-            </button>
-          )}
-        </div>
-
-        {isAuthenticated && user && (
-          <div className="mt-6 rounded-lg border p-4">
-            <h3 className="mb-3 text-lg font-semibold">Logged In User</h3>
-
-            <p>
-              <strong>Email:</strong> {user.email}
-            </p>
-
-            <p>
-              <strong>User ID:</strong> {user.userId}
-            </p>
-
-            <p>
-              <strong>Roles:</strong> {user.roles?.join(", ")}
-            </p>
-          </div>
+        {!isAuthenticated ? (
+          <button onClick={login} className="primary-action">
+            Login
+          </button>
+        ) : (
+          <button onClick={handleLogout} className="secondary-action">
+            Logout
+          </button>
         )}
+      </header>
 
-        {isAuthenticated && (
-          <div className="mt-6 break-all">
-            <h3 className="mb-2 text-lg font-semibold">
-              Access Token (Redux Memory)
-            </h3>
-
-            <p className="text-sm">{accessToken}</p>
+      <main>
+        <section className="hero-section">
+          <div className="hero-copy">
+            <p className="eyebrow">Interview preparation workspace</p>
+            <h1>
+              {isAuthenticated
+                ? `Welcome, ${displayName}`
+                : "Prepare smarter for every interview round."}
+            </h1>
+            <p className="hero-text">
+              A focused place for practice plans, calendar reminders, progress
+              tracking, and interview resources. Content modules will be added
+              here as the product grows.
+            </p>
+            <div className="hero-actions">
+              {!isAuthenticated ? (
+                <button onClick={login} className="primary-action large">
+                  Login with Google
+                </button>
+              ) : (
+                <a className="primary-action large" href="#practice">
+                  Continue
+                </a>
+              )}
+            </div>
           </div>
-        )}
-      </div>
 
-      <RemoteErrorBoundary
-        fallback={
-          <div className="rounded-xl border border-amber-300 bg-amber-50 p-6 text-amber-900">
-            Auth MFE is not running. Start `auth-mfe` on port 3001 to load it here.
+          <div className="hero-panel" aria-label="Preparation summary">
+            <div>
+              <span className="panel-label">Today</span>
+              <strong>Mock interview plan</strong>
+            </div>
+            <div className="panel-row">
+              <span>System design</span>
+              <span>Placeholder</span>
+            </div>
+            <div className="panel-row">
+              <span>DSA practice</span>
+              <span>Placeholder</span>
+            </div>
+            <div className="panel-row">
+              <span>Resume review</span>
+              <span>Placeholder</span>
+            </div>
           </div>
-        }
-      >
-        <Suspense fallback={<div>Loading Auth MFE...</div>}>
-          <AuthApp />
-        </Suspense>
-      </RemoteErrorBoundary>
+        </section>
+
+        <section className="feature-grid" aria-label="Homepage sections">
+          <article id="practice" className="feature-card">
+            <span className="feature-icon">01</span>
+            <h2>Practice</h2>
+            <p>Placeholder for coding, behavioral, and role-specific drills.</p>
+          </article>
+
+          <article id="calendar" className="feature-card">
+            <span className="feature-icon">02</span>
+            <h2>Calendar</h2>
+            <p>Placeholder for interviews, reminders, and preparation blocks.</p>
+          </article>
+
+          <article id="progress" className="feature-card">
+            <span className="feature-icon">03</span>
+            <h2>Progress</h2>
+            <p>Placeholder for readiness score, streaks, and completed tasks.</p>
+          </article>
+
+          <article id="resources" className="feature-card">
+            <span className="feature-icon">04</span>
+            <h2>Resources</h2>
+            <p>Placeholder for notes, links, templates, and curated guides.</p>
+          </article>
+        </section>
+      </main>
     </div>
   );
 };
